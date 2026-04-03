@@ -15,7 +15,7 @@ void main() {
   group('MockVpnEngine', () {
     test('validate fails when xray json is missing', () async {
       final engine = MockVpnEngine();
-      const entry = ConfigEntry(
+      final entry = ConfigEntry(
         id: '1',
         name: 'test',
         path: '/tmp/test.aw',

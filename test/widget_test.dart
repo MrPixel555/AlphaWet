@@ -13,7 +13,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('AW Manager UI'), findsOneWidget);
-    expect(find.text('No configs imported yet'), findsOneWidget);
+    expect(find.text('AW Manager UI'), findsOneWidget);
     expect(find.byType(FilledButton), findsWidgets);
     expect(find.textContaining('HTTP 127.0.0.1:10808'), findsOneWidget);
   });

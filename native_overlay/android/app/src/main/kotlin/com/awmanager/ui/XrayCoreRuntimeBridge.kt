@@ -153,19 +153,36 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     private fun resolvePackagedBinaryOrNull(): File? {
-        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: return null
         val candidateNames = listOf(
             PACKAGED_BINARY_NAME,
             "xray",
             "libxray.so",
             "libxraymain.so",
         )
-        for (name in candidateNames) {
-            val candidate = File(nativeLibraryDir, name)
-            if (candidate.exists()) {
-                candidate.setReadable(true, true)
-                candidate.setExecutable(true, true)
-                return candidate
+        val roots = linkedSetOf<File>()
+        context.applicationInfo.nativeLibraryDir?.let { roots += File(it) }
+        context.applicationInfo.nativeLibraryRootDir?.let { roots += File(it) }
+        context.applicationInfo.sourceDir?.let { roots += File(it).parentFile }
+
+        for (root in roots) {
+            if (!root.exists()) {
+                continue
+            }
+            val direct = candidateNames.firstNotNullOfOrNull { name ->
+                val candidate = File(root, name)
+                candidate.takeIf { it.exists() }
+            }
+            if (direct != null) {
+                direct.setReadable(true, true)
+                direct.setExecutable(true, true)
+                return direct
+            }
+            root.walkTopDown().maxDepth(2).forEach { candidate ->
+                if (candidate.isFile && candidate.name in candidateNames) {
+                    candidate.setReadable(true, true)
+                    candidate.setExecutable(true, true)
+                    return candidate
+                }
             }
         }
         return null
@@ -173,10 +190,21 @@ class XrayCoreRuntimeBridge(private val context: Context) {
 
     private fun buildMissingRuntimeMessage(): String {
         val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: "unavailable"
+        val nativeLibraryRootDir = context.applicationInfo.nativeLibraryRootDir ?: "unavailable"
+        val listing = try {
+            val dir = File(nativeLibraryDir)
+            if (dir.exists()) {
+                dir.listFiles()?.joinToString(", ") { it.name } ?: "<empty>"
+            } else {
+                "<dir-missing>"
+            }
+        } catch (_: Exception) {
+            "<unreadable>"
+        }
         return "Packaged Xray runtime was not found in nativeLibraryDir ($nativeLibraryDir). " +
-            "Your uploaded source archive does not contain the Android Xray binaries yet. " +
-            "Place real binaries at assets/xray/android/<abi>/xray and run tool/prepare_android_runtime.sh " +
-            "so they are copied to android/app/src/main/jniLibs/<abi>/$PACKAGED_BINARY_NAME before building."
+            "nativeLibraryRootDir=$nativeLibraryRootDir. Files seen: $listing. " +
+            "This usually means the .so was packaged inside the APK but not extracted to the filesystem. " +
+            "Enable native library extraction by setting android:extractNativeLibs=\"true\" or packaging.jniLibs.useLegacyPackaging=true before building."
     }
 
     private fun copyOptionalCommonAsset(fileName: String, assetsRoot: File) {

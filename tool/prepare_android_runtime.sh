@@ -50,81 +50,69 @@ path.write_text(text)
 PY2
 fi
 
-mkdir -p "${NATIVE_LIBS_DIR}"
 
-extract_from_release_zip() {
-  local abi="$1"
-  local asset_dest="$2"
-  local zip_candidates=()
-  case "${abi}" in
-    arm64-v8a)
-      zip_candidates=(
-        "${ROOT_DIR}/Xray-android-arm64-v8a.zip"
-        "${ROOT_DIR}/xray-android-arm64-v8a.zip"
-      )
-      ;;
-    x86_64)
-      zip_candidates=(
-        "${ROOT_DIR}/Xray-android-amd64.zip"
-        "${ROOT_DIR}/xray-android-amd64.zip"
-        "${ROOT_DIR}/Xray-android-x86_64.zip"
-        "${ROOT_DIR}/xray-android-x86_64.zip"
-      )
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+ensure_native_lib_extraction() {
+  local manifest_path="$1"
+  local app_gradle_kts="${ANDROID_DIR}/app/build.gradle.kts"
+  local app_gradle_groovy="${ANDROID_DIR}/app/build.gradle"
 
-  local zip_path=""
-  for candidate in "${zip_candidates[@]}"; do
-    if [ -f "${candidate}" ]; then
-      zip_path="${candidate}"
-      break
-    fi
-  done
-
-  if [ -z "${zip_path}" ]; then
-    return 1
+  if [ -f "${manifest_path}" ]; then
+    python3 - <<'PY3' "${manifest_path}"
+from pathlib import Path
+import re, sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text2 = re.sub(r'<application(\s+)(?![^>]*android:extractNativeLibs=)', '<application\\1android:extractNativeLibs="true" ', text, count=1, flags=re.S)
+if text2 != text:
+    path.write_text(text2)
+PY3
   fi
 
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' RETURN
-
-  if ! unzip -q -o "${zip_path}" -d "${tmpdir}"; then
-    echo "[ERROR] Failed to unzip ${zip_path}"
-    return 1
+  if [ -f "${app_gradle_kts}" ]; then
+    python3 - <<'PY4' "${app_gradle_kts}"
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = '    packaging {'
+block = '    packaging {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n'
+if 'useLegacyPackaging = true' not in text:
+    if needle in text:
+        text = text.replace(needle, block, 1)
+    else:
+        text += '\nandroid {\n    packaging {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n}\n'
+    path.write_text(text)
+PY4
+  elif [ -f "${app_gradle_groovy}" ]; then
+    python3 - <<'PY5' "${app_gradle_groovy}"
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = '    packagingOptions {'
+block = '    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n'
+if 'useLegacyPackaging true' not in text and 'useLegacyPackaging = true' not in text:
+    if needle in text:
+        text = text.replace(needle, block, 1)
+    else:
+        text += '\nandroid {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n    }\n}\n'
+    path.write_text(text)
+PY5
   fi
-
-  local extracted
-  extracted="$(find "${tmpdir}" -type f \( -name 'xray' -o -name 'xray.exe' \) | head -n 1 || true)"
-  if [ -z "${extracted}" ]; then
-    echo "[ERROR] Could not find xray binary inside ${zip_path}"
-    return 1
-  fi
-
-  mkdir -p "$(dirname "${asset_dest}")"
-  cp "${extracted}" "${asset_dest}"
-  chmod 755 "${asset_dest}"
-  echo "[OK] Extracted $(basename "${zip_path}") -> $(realpath --relative-to="${ROOT_DIR}" "${asset_dest}")"
 }
 
+ensure_native_lib_extraction "${MANIFEST_PATH}"
+
+mkdir -p "${NATIVE_LIBS_DIR}"
 copy_native_binary() {
   local abi="$1"
   local src="${ROOT_DIR}/assets/xray/android/${abi}/xray"
   local dest_dir="${NATIVE_LIBS_DIR}/${abi}"
   local dest="${dest_dir}/libxraycore.so"
-
-  if [ ! -f "${src}" ]; then
-    extract_from_release_zip "${abi}" "${src}" || true
-  fi
-
   if [ ! -f "${src}" ]; then
     echo "[WARN] Missing ${src}; ${abi} runtime will not be embedded."
     return
   fi
-
   mkdir -p "${dest_dir}"
   cp "${src}" "${dest}"
   chmod 755 "${dest}"
@@ -137,3 +125,4 @@ copy_native_binary "x86_64"
 echo "[OK] Applied Android runtime overlay to ${TARGET_DIR}"
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
 echo "[OK] Xray runtime will be loaded from nativeLibraryDir at install time."
+echo "[OK] Native library extraction was forced on for executable runtime support."

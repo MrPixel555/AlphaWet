@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="${1:-.}"
 OVERLAY_SRC_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/kotlin/com/awmanager/ui"
 ANDROID_DIR="${ROOT_DIR}/android"
-NATIVE_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 
 if [ ! -d "${ANDROID_DIR}" ]; then
   echo "[ERROR] android/ directory was not found. Run flutter create --platforms=android first."
@@ -36,93 +35,23 @@ for src in "${OVERLAY_SRC_DIR}"/*.kt; do
 done
 
 MANIFEST_PATH="${ANDROID_DIR}/app/src/main/AndroidManifest.xml"
-if [ -f "${MANIFEST_PATH}" ] && ! grep -q 'android.permission.INTERNET' "${MANIFEST_PATH}"; then
+if [ -f "${MANIFEST_PATH}" ]; then
   python3 - <<'PY2' "${MANIFEST_PATH}"
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 text = path.read_text()
-needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-replacement = needle + '\n    <uses-permission android:name="android.permission.INTERNET" />'
-if needle in text:
-    text = text.replace(needle, replacement, 1)
+manifest_open = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+if 'android.permission.INTERNET' not in text and manifest_open in text:
+    text = text.replace(
+        manifest_open,
+        manifest_open + '\n    <uses-permission android:name="android.permission.INTERNET" />',
+        1,
+    )
 path.write_text(text)
 PY2
 fi
 
-
-ensure_native_lib_extraction() {
-  local manifest_path="$1"
-  local app_gradle_kts="${ANDROID_DIR}/app/build.gradle.kts"
-  local app_gradle_groovy="${ANDROID_DIR}/app/build.gradle"
-
-  if [ -f "${manifest_path}" ]; then
-    python3 - <<'PY3' "${manifest_path}"
-from pathlib import Path
-import re, sys
-path = Path(sys.argv[1])
-text = path.read_text()
-text2 = re.sub(r'<application(\s+)(?![^>]*android:extractNativeLibs=)', '<application\\1android:extractNativeLibs="true" ', text, count=1, flags=re.S)
-if text2 != text:
-    path.write_text(text2)
-PY3
-  fi
-
-  if [ -f "${app_gradle_kts}" ]; then
-    python3 - <<'PY4' "${app_gradle_kts}"
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text()
-needle = '    packaging {'
-block = '    packaging {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n'
-if 'useLegacyPackaging = true' not in text:
-    if needle in text:
-        text = text.replace(needle, block, 1)
-    else:
-        text += '\nandroid {\n    packaging {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n}\n'
-    path.write_text(text)
-PY4
-  elif [ -f "${app_gradle_groovy}" ]; then
-    python3 - <<'PY5' "${app_gradle_groovy}"
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text()
-needle = '    packagingOptions {'
-block = '    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n'
-if 'useLegacyPackaging true' not in text and 'useLegacyPackaging = true' not in text:
-    if needle in text:
-        text = text.replace(needle, block, 1)
-    else:
-        text += '\nandroid {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n    }\n}\n'
-    path.write_text(text)
-PY5
-  fi
-}
-
-ensure_native_lib_extraction "${MANIFEST_PATH}"
-
-mkdir -p "${NATIVE_LIBS_DIR}"
-copy_native_binary() {
-  local abi="$1"
-  local src="${ROOT_DIR}/assets/xray/android/${abi}/xray"
-  local dest_dir="${NATIVE_LIBS_DIR}/${abi}"
-  local dest="${dest_dir}/libxraycore.so"
-  if [ ! -f "${src}" ]; then
-    echo "[WARN] Missing ${src}; ${abi} runtime will not be embedded."
-    return
-  fi
-  mkdir -p "${dest_dir}"
-  cp "${src}" "${dest}"
-  chmod 755 "${dest}"
-  echo "[OK] Embedded $(realpath --relative-to="${ROOT_DIR}" "${src}") -> $(realpath --relative-to="${ROOT_DIR}" "${dest}")"
-}
-
-copy_native_binary "arm64-v8a"
-copy_native_binary "x86_64"
-
 echo "[OK] Applied Android runtime overlay to ${TARGET_DIR}"
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
-echo "[OK] Xray runtime will be loaded from nativeLibraryDir at install time."
-echo "[OK] Native library extraction was forced on for executable runtime support."
+echo "[OK] Xray will be loaded from Flutter assets at runtime; nothing is copied into jniLibs."

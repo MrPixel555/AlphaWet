@@ -1,6 +1,7 @@
 package com.awmanager.ui
 
 import android.content.Context
+import android.os.Build
 import io.flutter.plugin.common.MethodCall
 import java.io.File
 import java.io.FileOutputStream
@@ -17,7 +18,6 @@ import java.util.UUID
 class XrayCoreRuntimeBridge(private val context: Context) {
     companion object {
         const val CHANNEL = "aw_manager_ui/xray_core"
-        private const val PACKAGED_BINARY_NAME = "libxraycore.so"
     }
 
     fun validateConfig(call: MethodCall): Map<String, Any?> {
@@ -52,8 +52,8 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             return XrayCoreRuntimeManager.pingProxy(httpPort = httpPort, url = url)
         }
 
-        val packagedBinary = resolvePackagedBinaryOrNull()
-        if (configJson != null && packagedBinary != null) {
+        val binaryResolution = resolveRuntimeBinary(throwOnMissing = false)
+        if (configJson != null && binaryResolution.binaryFile != null) {
             val bundle = prepareBundleFromRaw(
                 configId = "ping_$configId",
                 displayName = "$displayName (Ping)",
@@ -61,14 +61,15 @@ class XrayCoreRuntimeBridge(private val context: Context) {
                 httpPort = httpPort,
                 socksPort = socksPort,
                 enableDeviceVpn = false,
-                binaryFile = packagedBinary,
+                binaryFile = binaryResolution.binaryFile,
+                executionMode = binaryResolution.executionMode,
             )
             return XrayCoreRuntimeManager.pingViaTransientRuntime(bundle = bundle, url = url)
         }
 
         if (targetHost != null && targetPort != null) {
-            val fallbackReason = if (packagedBinary == null) {
-                "Packaged Xray runtime was not found, so a direct TCP reachability probe was used instead of a proxy-to-google test."
+            val fallbackReason = if (binaryResolution.binaryFile == null) {
+                "Xray runtime asset is unavailable on this device, so a direct TCP reachability probe was used instead of a proxy-to-google test. ${binaryResolution.message ?: ""}".trim()
             } else {
                 "Xray JSON was unavailable, so a direct TCP reachability probe was used instead of a proxy-to-google test."
             }
@@ -82,8 +83,10 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         return mapOf(
             "success" to false,
             "message" to when {
-                packagedBinary == null ->
-                    "Packaged Xray runtime was not found and no direct host/port fallback was available for ping."
+                binaryResolution.binaryFile == null ->
+                    binaryResolution.message.orEmpty().ifBlank {
+                        "Xray runtime asset was not available and no direct host/port fallback was provided for ping."
+                    }
                 else ->
                     "Ping requires either a running core, a ready Xray config, or a host/port target."
             },
@@ -99,7 +102,8 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         val httpPort = call.argument<Int>("httpPort") ?: 10808
         val socksPort = call.argument<Int>("socksPort") ?: 10809
         val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
-        val binaryFile = resolvePackagedBinary()
+        val binaryResolution = resolveRuntimeBinary(throwOnMissing = true)
+        val binaryFile = requireNotNull(binaryResolution.binaryFile) { binaryResolution.message ?: "Runtime binary is missing." }
         return prepareBundleFromRaw(
             configId = configId,
             displayName = displayName,
@@ -108,6 +112,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             socksPort = socksPort,
             enableDeviceVpn = enableDeviceVpn,
             binaryFile = binaryFile,
+            executionMode = binaryResolution.executionMode,
         )
     }
 
@@ -119,6 +124,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         socksPort: Int,
         enableDeviceVpn: Boolean,
         binaryFile: File,
+        executionMode: RuntimeExecutionMode,
     ): RuntimeBundle {
         val runtimeRoot = File(context.filesDir, "xray_runtime").apply { mkdirs() }
         val configRoot = File(runtimeRoot, "configs").apply { mkdirs() }
@@ -144,67 +150,109 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             httpPort = httpPort,
             socksPort = socksPort,
             enableDeviceVpn = enableDeviceVpn,
+            executionMode = executionMode,
         )
     }
 
-    private fun resolvePackagedBinary(): File {
-        return resolvePackagedBinaryOrNull()
-            ?: throw IllegalStateException(buildMissingRuntimeMessage())
-    }
-
-    private fun resolvePackagedBinaryOrNull(): File? {
-        val candidateNames = listOf(
-            PACKAGED_BINARY_NAME,
-            "xray",
-            "libxray.so",
-            "libxraymain.so",
-        )
-        val roots = linkedSetOf<File>()
-        context.applicationInfo.nativeLibraryDir?.let { roots += File(it) }
-        context.applicationInfo.nativeLibraryRootDir?.let { roots += File(it) }
-        context.applicationInfo.sourceDir?.let { roots += File(it).parentFile }
-
-        for (root in roots) {
-            if (!root.exists()) {
-                continue
-            }
-            val direct = candidateNames.firstNotNullOfOrNull { name ->
-                val candidate = File(root, name)
-                candidate.takeIf { it.exists() }
-            }
-            if (direct != null) {
-                direct.setReadable(true, true)
-                direct.setExecutable(true, true)
-                return direct
-            }
-            root.walkTopDown().maxDepth(2).forEach { candidate ->
-                if (candidate.isFile && candidate.name in candidateNames) {
-                    candidate.setReadable(true, true)
-                    candidate.setExecutable(true, true)
-                    return candidate
-                }
-            }
-        }
-        return null
-    }
-
-    private fun buildMissingRuntimeMessage(): String {
-        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: "unavailable"
-        val nativeLibraryRootDir = context.applicationInfo.nativeLibraryRootDir ?: "unavailable"
-        val listing = try {
-            val dir = File(nativeLibraryDir)
-            if (dir.exists()) {
-                dir.listFiles()?.joinToString(", ") { it.name } ?: "<empty>"
+    private fun resolveRuntimeBinary(throwOnMissing: Boolean): RuntimeBinaryResolution {
+        val abi = preferredRuntimeAbi()
+        val assetPath = "flutter_assets/assets/xray/android/$abi/xray"
+        if (!assetExists(assetPath)) {
+            val optionalX64 = abi == "x86_64"
+            val message = if (optionalX64) {
+                "No bundled Xray binary for ABI $abi. Add assets/xray/android/$abi/xray or run on an arm64 device."
             } else {
-                "<dir-missing>"
+                "Bundled Xray binary was not found for ABI $abi. Put the binary at assets/xray/android/$abi/xray and rebuild."
             }
-        } catch (_: Exception) {
-            "<unreadable>"
+            if (throwOnMissing) {
+                throw IllegalStateException(message)
+            }
+            return RuntimeBinaryResolution(null, RuntimeExecutionMode.DIRECT, message)
         }
-        return "Packaged Xray runtime was not found in nativeLibraryDir ($nativeLibraryDir). " +
-            "nativeLibraryRootDir=$nativeLibraryRootDir. Files seen: $listing. " +
-            "This usually means the .so was packaged inside the APK but not extracted to the filesystem. " +
-            "Enable native library extraction by setting android:extractNativeLibs=\"true\" or packaging.jniLibs.useLegacyPackaging=true before building."
+
+        val extracted = extractAssetBinaryToPrivateDir(assetPath, abi)
+        if (setExecutable(extracted)) {
+            return RuntimeBinaryResolution(extracted, RuntimeExecutionMode.DIRECT, null)
+        }
+
+        if (hasWorkingSu()) {
+            val rootedCopy = copyBinaryToRootExecLocation(extracted, abi)
+            if (rootedCopy != null) {
+                return RuntimeBinaryResolution(rootedCopy, RuntimeExecutionMode.ROOT_SU, null)
+            }
+        }
+
+        val message = buildString {
+            append("Xray binary for ABI ")
+            append(abi)
+            append(" was bundled, but Android refused local execution from ")
+            append(extracted.absolutePath)
+            append(" and no rooted fallback could be prepared.")
+        }
+        if (throwOnMissing) {
+            throw IllegalStateException(message)
+        }
+        return RuntimeBinaryResolution(null, RuntimeExecutionMode.DIRECT, message)
+    }
+
+    private fun preferredRuntimeAbi(): String {
+        val supported = Build.SUPPORTED_ABIS?.toList().orEmpty()
+        return when {
+            supported.any { it == "arm64-v8a" } -> "arm64-v8a"
+            supported.any { it == "x86_64" } -> "x86_64"
+            supported.isNotEmpty() -> supported.first()
+            else -> "arm64-v8a"
+        }
+    }
+
+    private fun extractAssetBinaryToPrivateDir(assetPath: String, abi: String): File {
+        val runtimeRoot = File(context.filesDir, "xray_runtime/bin/$abi").apply { mkdirs() }
+        val target = File(runtimeRoot, "xray")
+        context.assets.open(assetPath).use { input ->
+            FileOutputStream(target).use { output -> input.copyTo(output) }
+        }
+        target.setReadable(true, true)
+        target.setWritable(true, true)
+        return target
+    }
+
+    private fun setExecutable(file: File): Boolean {
+        return try {
+            file.setReadable(true, true)
+            file.setWritable(true, true)
+            file.setExecutable(true, true)
+            file.canExecute()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun hasWorkingSu(): Boolean {
+        return try {
+            val proc = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+            val output = proc.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = proc.waitFor()
+            exitCode == 0 && output.contains("uid=0")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun copyBinaryToRootExecLocation(source: File, abi: String): File? {
+        val rootDir = File("/data/local/tmp/aw_manager_ui/$abi")
+        return try {
+            val prep = ProcessBuilder(
+                "su",
+                "-c",
+                "mkdir -p ${rootDir.absolutePath} && cp ${source.absolutePath} ${rootDir.absolutePath}/xray && chmod 755 ${rootDir.absolutePath}/xray"
+            ).redirectErrorStream(true).start()
+            prep.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = prep.waitFor()
+            val rootedBinary = File(rootDir, "xray")
+            if (exitCode == 0 && rootedBinary.exists()) rootedBinary else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun copyOptionalCommonAsset(fileName: String, assetsRoot: File) {
@@ -230,6 +278,17 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 }
 
+enum class RuntimeExecutionMode {
+    DIRECT,
+    ROOT_SU,
+}
+
+data class RuntimeBinaryResolution(
+    val binaryFile: File?,
+    val executionMode: RuntimeExecutionMode,
+    val message: String?,
+)
+
 data class RuntimeBundle(
     val configId: String,
     val displayName: String,
@@ -240,6 +299,7 @@ data class RuntimeBundle(
     val httpPort: Int,
     val socksPort: Int,
     val enableDeviceVpn: Boolean,
+    val executionMode: RuntimeExecutionMode,
 )
 
 object XrayCoreRuntimeManager {
@@ -255,17 +315,7 @@ object XrayCoreRuntimeManager {
     private var currentDeviceVpnMode: Boolean = false
 
     fun validate(bundle: RuntimeBundle): Map<String, Any?> {
-        val builder = ProcessBuilder(
-            bundle.binaryFile.absolutePath,
-            "run",
-            "-test",
-            "-c",
-            bundle.configFile.absolutePath,
-        )
-        builder.redirectErrorStream(true)
-        builder.directory(bundle.binaryFile.parentFile)
-        builder.environment()["XRAY_LOCATION_ASSET"] = bundle.assetDir.absolutePath
-        val proc = builder.start()
+        val proc = createRuntimeProcess(bundle, testConfigOnly = true)
         val output = proc.inputStream.bufferedReader().use { it.readText() }
         val exitCode = proc.waitFor()
         return if (exitCode == 0) {
@@ -282,40 +332,24 @@ object XrayCoreRuntimeManager {
                         append(". Device-VPN mode is only scaffolded in this build.")
                     }
                 },
-                "sessionId" to sessionId,
+                "rawOutput" to output,
             )
         } else {
             mapOf(
                 "state" to "failed",
                 "success" to false,
-                "message" to buildString {
-                    append("Xray rejected the config")
-                    if (output.isNotBlank()) {
-                        append(": ")
-                        append(output.lines().takeLast(6).joinToString(" | "))
-                    }
-                },
-                "sessionId" to sessionId,
+                "message" to output.ifBlank { "Xray rejected the generated config." },
+                "rawOutput" to output,
+                "exitCode" to exitCode,
             )
         }
     }
 
     fun start(bundle: RuntimeBundle): Map<String, Any?> {
         synchronized(lock) {
-            stopInternal("Switching runtime.")
-
-            val newSessionId = "xray-${bundle.configId}-${UUID.randomUUID()}"
-            val builder = ProcessBuilder(
-                bundle.binaryFile.absolutePath,
-                "run",
-                "-c",
-                bundle.configFile.absolutePath,
-            )
-            builder.redirectErrorStream(true)
-            builder.directory(bundle.binaryFile.parentFile)
-            builder.environment()["XRAY_LOCATION_ASSET"] = bundle.assetDir.absolutePath
-            val proc = builder.start()
-
+            stopInternal("Restarting Xray core for ${bundle.configId}.")
+            val newSessionId = UUID.randomUUID().toString()
+            val proc = createRuntimeProcess(bundle, testConfigOnly = false)
             process = proc
             sessionId = newSessionId
             activeConfigId = bundle.configId
@@ -401,16 +435,7 @@ object XrayCoreRuntimeManager {
     }
 
     fun pingViaTransientRuntime(bundle: RuntimeBundle, url: String): Map<String, Any?> {
-        val builder = ProcessBuilder(
-            bundle.binaryFile.absolutePath,
-            "run",
-            "-c",
-            bundle.configFile.absolutePath,
-        )
-        builder.redirectErrorStream(true)
-        builder.directory(bundle.binaryFile.parentFile)
-        builder.environment()["XRAY_LOCATION_ASSET"] = bundle.assetDir.absolutePath
-        val proc = builder.start()
+        val proc = createRuntimeProcess(bundle, testConfigOnly = false)
         startLogPump(proc, bundle.logFile)
         return try {
             val ready = waitForPorts(proc, bundle.socksPort, bundle.httpPort, 5000L)
@@ -463,6 +488,33 @@ object XrayCoreRuntimeManager {
                 "deviceVpnRequested" to currentDeviceVpnMode,
             )
         }
+    }
+
+    private fun createRuntimeProcess(bundle: RuntimeBundle, testConfigOnly: Boolean): Process {
+        val args = mutableListOf("run")
+        if (testConfigOnly) {
+            args += "-test"
+        }
+        args += listOf("-c", bundle.configFile.absolutePath)
+        val commandLine = buildCommandLine(bundle.binaryFile, args, bundle.assetDir)
+        val builder = when (bundle.executionMode) {
+            RuntimeExecutionMode.DIRECT -> ProcessBuilder(commandLine)
+            RuntimeExecutionMode.ROOT_SU -> ProcessBuilder("su", "-c", commandLine.joinToString(" ") { shellQuote(it) })
+        }
+        builder.redirectErrorStream(true)
+        builder.directory(bundle.binaryFile.parentFile)
+        return builder.start()
+    }
+
+    private fun buildCommandLine(binaryFile: File, args: List<String>, assetDir: File): List<String> {
+        val env = "XRAY_LOCATION_ASSET=${shellQuote(assetDir.absolutePath)}"
+        val binary = shellQuote(binaryFile.absolutePath)
+        val fullArgs = args.joinToString(" ") { shellQuote(it) }
+        return listOf("sh", "-c", "$env exec $binary $fullArgs")
+    }
+
+    private fun shellQuote(value: String): String {
+        return "'" + value.replace("'", "'\\''") + "'"
     }
 
     private fun performHttpProxyProbe(httpPort: Int, url: String): Map<String, Any?> {

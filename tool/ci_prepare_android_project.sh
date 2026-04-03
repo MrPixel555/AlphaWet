@@ -16,7 +16,7 @@ flutter create \
 rsync -av \
   --exclude='.git' \
   --exclude='.github' \
-  --exclude='android' \
+  --exclude='/android/' \
   "${REPO_DIR}/" "${BUILD_ROOT}/"
 
 bash "${BUILD_ROOT}/tool/prepare_android_runtime.sh" "${BUILD_ROOT}"

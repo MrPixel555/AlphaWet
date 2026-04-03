@@ -1,5 +1,5 @@
 name: aw_manager_ui
-description: Material 3 mock UI for importing .aw configs and managing visual config cards.
+description: Flutter UI for importing .aw configs, building Xray JSON, and launching Android Xray-core.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -10,6 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   file_picker: ^10.3.10
+  cryptography: ^2.7.0
+  path_provider: ^2.1.5
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
@@ -18,3 +21,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/xray/android/arm64-v8a/
+    - assets/xray/android/x86_64/
+    - assets/xray/common/

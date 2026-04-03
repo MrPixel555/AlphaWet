@@ -1,35 +1,82 @@
 # AW Manager UI
 
-A Flutter Material 3 mock UI that:
+A Flutter Material 3 app for importing `.aw` configs, building Xray JSON, and launching a **real Android Xray-core process** when the Xray binaries are packaged into the app assets.
+
+## What this build does
 
 - opens a native file picker
 - accepts only `.aw` files
-- adds imported configs to a vertical list
-- shows a per-config on/off switch
-- shows a mock Ping button with fake latency
+- validates imports and builds Xray client JSON
+- lets the user configure local listener ports from inside the app
+- defaults to:
+  - HTTP: `127.0.0.1:10808`
+  - SOCKS: `127.0.0.1:10809`
+- starts and stops a real Android `xray` process through a Flutter `MethodChannel`
+- exposes Android VPN permission as an app setting for future device-wide mode
+- exports application logs
 
-This repository is intentionally UI-only. It does **not** implement real VPN logic, parsing, import persistence, or real network ping.
+## Important limitation
 
-## How to use this repo
+This repository now includes a **device-VPN settings toggle and Android VPN permission flow**, but it still **does not implement a native TUN bridge**.
 
-1. Create an empty GitHub repository.
-2. Upload the contents of this ZIP to that repository.
-3. Push to `main` or run the workflow manually from the **Actions** tab.
-4. Download the artifact named `aw-manager-ui-universal-apk`.
+That means:
+- the app launches **real Xray-core**, not a fake mock runtime
+- custom HTTP/SOCKS listener ports are applied to the generated Xray config and native runtime checks
+- the **device-wide VPN switch is experimental scaffolding**, not a finished full-device tunnel
+- the proven runtime path is still the local HTTP/SOCKS proxy listeners
 
-## What the workflow does
+## Where to place the Xray binaries
 
-The workflow generates the Android scaffold from the currently installed Flutter SDK during CI, then copies this repo's Flutter source into that generated app before building a universal release APK.
+Download the Android Xray-core release that matches your target ABIs and place the extracted binaries at these exact paths **before building**:
 
-That design keeps the Android/Gradle files aligned with the current Flutter version and reduces template drift.
+- `assets/xray/android/arm64-v8a/xray`
+- `assets/xray/android/x86_64/xray`
 
-## Output
+Optional resource files:
 
-The workflow uploads this artifact:
+- `assets/xray/common/geoip.dat`
+- `assets/xray/common/geosite.dat`
 
-- `aw-manager-ui-universal-release.apk`
+## How to prepare the Android project locally
 
-## Notes
+If your repo does not have `android/` yet, generate it first:
 
-- The APK is meant for testing and direct install.
-- If you later want Play Store-ready signing, add a real keystore and signing secrets.
+```bash
+flutter create --platforms=android --project-name aw_manager_ui --org com.awmanager .
+```
+
+Then apply the native Android overlay. The script automatically detects the generated Android package and rewrites the Kotlin overlay to match it:
+
+```bash
+bash tool/prepare_android_runtime.sh .
+```
+
+Then fetch packages and build:
+
+```bash
+flutter pub get
+flutter test
+flutter analyze
+flutter build apk --release
+```
+
+## GitHub Actions build
+
+The workflow in `.github/workflows/android-universal.yml`:
+- generates a fresh Android scaffold through `tool/ci_prepare_android_project.sh`
+- overlays this repository's Flutter source
+- rewrites the Kotlin package name to match the generated Android project
+- verifies whether real Xray binaries are packaged or only placeholders are present
+- runs tests and analysis
+- builds a universal release APK
+- uploads the prepared project snapshot if the CI job fails
+
+## Secure import notes
+
+Secure envelope import now expects cryptographic material to be supplied via `--dart-define`:
+
+- `AW_TRANSPORT_KEY_BASE64`
+- `AW_ED25519_PUBLIC_KEY_BASE64`
+- `AW_ALLOW_LEGACY_PLAINTEXT_IMPORT`
+
+Legacy plaintext import is disabled by default.

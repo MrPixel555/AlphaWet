@@ -10,6 +10,10 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      BUILD_ROOT: /tmp/aw_manager_ui
 
     steps:
       - name: Checkout repository
@@ -27,47 +31,65 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Show Flutter version
-        run: flutter --version
-
-      - name: Generate fresh Android scaffold
+      - name: Show tool versions
         run: |
-          rm -rf /tmp/aw_manager_ui
-          flutter create \
-            --platforms=android \
-            --project-name aw_manager_ui \
-            --org com.awmanager.ui \
-            /tmp/aw_manager_ui
+          flutter --version
+          dart --version
+          java -version
 
-      - name: Overlay repository source onto generated project
-        run: |
-          rsync -av \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='android' \
-            ./ /tmp/aw_manager_ui/
+      - name: Prepare Android project for CI
+        run: bash tool/ci_prepare_android_project.sh "$GITHUB_WORKSPACE" "$BUILD_ROOT"
 
       - name: Install dependencies
-        working-directory: /tmp/aw_manager_ui
+        working-directory: ${{ env.BUILD_ROOT }}
         run: flutter pub get
 
+      - name: Run tests
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter test
+
       - name: Static analysis
-        working-directory: /tmp/aw_manager_ui
+        working-directory: ${{ env.BUILD_ROOT }}
         run: flutter analyze
 
-      - name: Build universal release APK
-        working-directory: /tmp/aw_manager_ui
-        run: flutter build apk --release
+      - name: Compose optional dart-define flags
+        env:
+          AW_TRANSPORT_KEY_BASE64: ${{ secrets.AW_TRANSPORT_KEY_BASE64 }}
+          AW_ED25519_PUBLIC_KEY_BASE64: ${{ secrets.AW_ED25519_PUBLIC_KEY_BASE64 }}
+          AW_ALLOW_LEGACY_PLAINTEXT_IMPORT: ${{ secrets.AW_ALLOW_LEGACY_PLAINTEXT_IMPORT }}
+        run: |
+          args=()
+          [ -n "${AW_TRANSPORT_KEY_BASE64:-}" ] && args+=("--dart-define=AW_TRANSPORT_KEY_BASE64=${AW_TRANSPORT_KEY_BASE64}")
+          [ -n "${AW_ED25519_PUBLIC_KEY_BASE64:-}" ] && args+=("--dart-define=AW_ED25519_PUBLIC_KEY_BASE64=${AW_ED25519_PUBLIC_KEY_BASE64}")
+          [ -n "${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT:-}" ] && args+=("--dart-define=AW_ALLOW_LEGACY_PLAINTEXT_IMPORT=${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT}")
+          printf 'DART_DEFINE_ARGS=%s\n' "${args[*]}" >> "$GITHUB_ENV"
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "[INFO] No optional dart-defines were supplied via GitHub Secrets."
+          else
+            echo "[OK] Optional dart-defines were composed from GitHub Secrets."
+          fi
 
-      - name: Collect APK
+      - name: Build universal release APK
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter build apk --release ${DART_DEFINE_ARGS}
+
+      - name: Collect build outputs
         run: |
           mkdir -p dist
-          cp /tmp/aw_manager_ui/build/app/outputs/flutter-apk/app-release.apk \
+          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-release.apk" \
             dist/aw-manager-ui-universal-release.apk
 
-      - name: Upload artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: aw-manager-ui-universal-apk
           path: dist/aw-manager-ui-universal-release.apk
           if-no-files-found: error
+
+      - name: Upload prepared Android project on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aw-manager-ui-prepared-project-failure-snapshot
+          path: ${{ env.BUILD_ROOT }}
+          if-no-files-found: ignore

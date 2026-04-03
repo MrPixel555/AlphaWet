@@ -1,0 +1,95 @@
+name: Build Universal Android APK
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      BUILD_ROOT: /tmp/aw_manager_ui
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          dart --version
+          java -version
+
+      - name: Prepare Android project for CI
+        run: bash tool/ci_prepare_android_project.sh "$GITHUB_WORKSPACE" "$BUILD_ROOT"
+
+      - name: Install dependencies
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter pub get
+
+      - name: Run tests
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter test
+
+      - name: Static analysis
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter analyze
+
+      - name: Compose optional dart-define flags
+        env:
+          AW_TRANSPORT_KEY_BASE64: ${{ secrets.AW_TRANSPORT_KEY_BASE64 }}
+          AW_ED25519_PUBLIC_KEY_BASE64: ${{ secrets.AW_ED25519_PUBLIC_KEY_BASE64 }}
+          AW_ALLOW_LEGACY_PLAINTEXT_IMPORT: ${{ secrets.AW_ALLOW_LEGACY_PLAINTEXT_IMPORT }}
+        run: |
+          args=()
+          [ -n "${AW_TRANSPORT_KEY_BASE64:-}" ] && args+=("--dart-define=AW_TRANSPORT_KEY_BASE64=${AW_TRANSPORT_KEY_BASE64}")
+          [ -n "${AW_ED25519_PUBLIC_KEY_BASE64:-}" ] && args+=("--dart-define=AW_ED25519_PUBLIC_KEY_BASE64=${AW_ED25519_PUBLIC_KEY_BASE64}")
+          [ -n "${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT:-}" ] && args+=("--dart-define=AW_ALLOW_LEGACY_PLAINTEXT_IMPORT=${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT}")
+          printf 'DART_DEFINE_ARGS=%s\n' "${args[*]}" >> "$GITHUB_ENV"
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "[INFO] No optional dart-defines were supplied via GitHub Secrets."
+          else
+            echo "[OK] Optional dart-defines were composed from GitHub Secrets."
+          fi
+
+      - name: Build universal release APK
+        working-directory: ${{ env.BUILD_ROOT }}
+        run: flutter build apk --release ${DART_DEFINE_ARGS}
+
+      - name: Collect build outputs
+        run: |
+          mkdir -p dist
+          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-release.apk" \
+            dist/aw-manager-ui-universal-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aw-manager-ui-universal-apk
+          path: dist/aw-manager-ui-universal-release.apk
+          if-no-files-found: error
+
+      - name: Upload prepared Android project on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aw-manager-ui-prepared-project-failure-snapshot
+          path: ${{ env.BUILD_ROOT }}
+          if-no-files-found: ignore

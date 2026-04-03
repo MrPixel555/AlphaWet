@@ -230,7 +230,7 @@ class AwXrayConfigBuilder {
       case 'http':
         streamSettings['httpSettings'] = <String, dynamic>{
           'path': _normalizeOrDefault(profile.transport.path, '/'),
-          if (_hasText(profile.transport.host)) 'host': <Object>[profile.transport.host],
+          if (_hasText(profile.transport.host)) 'host': <String>[profile.transport.host!],
         };
         break;
       case 'tcp':

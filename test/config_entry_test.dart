@@ -11,7 +11,7 @@ void main() {
   );
 
   test('copyWith can clear nullable fields explicitly', () {
-    const entry = ConfigEntry(
+    final entry = ConfigEntry(
       id: '1',
       name: 'test',
       path: '/tmp/test.aw',

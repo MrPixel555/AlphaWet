@@ -6,7 +6,7 @@ import 'package:aw_manager_ui/runtime/mock_vpn_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const profile = AwConnectionProfile(
+  final profile = AwConnectionProfile(
     displayName: 'test',
     protocol: 'vless',
     host: 'example.com',
@@ -35,7 +35,7 @@ void main() {
 
     test('connect succeeds when xray json exists', () async {
       final engine = MockVpnEngine();
-      const entry = ConfigEntry(
+      final entry = ConfigEntry(
         id: '1',
         name: 'test',
         path: '/tmp/test.aw',

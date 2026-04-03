@@ -1,0 +1,210 @@
+#include <jni.h>
+#include <android/log.h>
+#include <csignal>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <string>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define LOG_TAG "xrayjni"
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+namespace {
+std::string JStringToStdString(JNIEnv* env, jstring value) {
+    if (value == nullptr) {
+        return std::string();
+    }
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (chars == nullptr) {
+        return std::string();
+    }
+    std::string out(chars);
+    env->ReleaseStringUTFChars(value, chars);
+    return out;
+}
+
+int RedirectLog(const std::string& log_path) {
+    int fd = open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+    if (fd < 0) {
+        return -errno;
+    }
+    if (dup2(fd, STDOUT_FILENO) < 0) {
+        int saved = errno;
+        close(fd);
+        return -saved;
+    }
+    if (dup2(fd, STDERR_FILENO) < 0) {
+        int saved = errno;
+        close(fd);
+        return -saved;
+    }
+    if (fd > STDERR_FILENO) {
+        close(fd);
+    }
+    return 0;
+}
+
+long SpawnXray(
+    const std::string& binary_path,
+    const std::string& config_path,
+    const std::string& asset_dir,
+    const std::string& working_dir,
+    const std::string& log_path,
+    bool validate_only,
+    int* validation_exit_code
+) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -errno;
+    }
+
+    if (pid == 0) {
+        if (!working_dir.empty()) {
+            chdir(working_dir.c_str());
+        }
+        const int redirect = RedirectLog(log_path);
+        if (redirect < 0) {
+            _exit(120);
+        }
+        setenv("XRAY_LOCATION_ASSET", asset_dir.c_str(), 1);
+        chmod(binary_path.c_str(), 0755);
+
+        if (validate_only) {
+            execl(
+                binary_path.c_str(),
+                binary_path.c_str(),
+                "run",
+                "-test",
+                "-c",
+                config_path.c_str(),
+                static_cast<char*>(nullptr)
+            );
+        } else {
+            execl(
+                binary_path.c_str(),
+                binary_path.c_str(),
+                "run",
+                "-c",
+                config_path.c_str(),
+                static_cast<char*>(nullptr)
+            );
+        }
+        dprintf(STDERR_FILENO, "exec failed errno=%d (%s)\n", errno, strerror(errno));
+        _exit(127);
+    }
+
+    if (validate_only) {
+        int status = 0;
+        if (waitpid(pid, &status, 0) < 0) {
+            return -errno;
+        }
+        if (WIFEXITED(status)) {
+            *validation_exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            *validation_exit_code = 128 + WTERMSIG(status);
+        } else {
+            *validation_exit_code = 1;
+        }
+        return 0;
+    }
+
+    return static_cast<long>(pid);
+}
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_awmanager_ui_XrayNativeBridge_validate(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring binaryPath,
+    jstring configPath,
+    jstring assetDir,
+    jstring workingDir,
+    jstring logPath
+) {
+    const std::string binary_path = JStringToStdString(env, binaryPath);
+    const std::string config_path = JStringToStdString(env, configPath);
+    const std::string asset_dir = JStringToStdString(env, assetDir);
+    const std::string working_dir = JStringToStdString(env, workingDir);
+    const std::string log_path = JStringToStdString(env, logPath);
+
+    int exit_code = 1;
+    const long result = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, true, &exit_code);
+    if (result < 0) {
+        ALOGE("validate spawn failed: %ld", result);
+        return static_cast<jint>(-1 * result);
+    }
+    return static_cast<jint>(exit_code);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_awmanager_ui_XrayNativeBridge_start(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring binaryPath,
+    jstring configPath,
+    jstring assetDir,
+    jstring workingDir,
+    jstring logPath
+) {
+    const std::string binary_path = JStringToStdString(env, binaryPath);
+    const std::string config_path = JStringToStdString(env, configPath);
+    const std::string asset_dir = JStringToStdString(env, assetDir);
+    const std::string working_dir = JStringToStdString(env, workingDir);
+    const std::string log_path = JStringToStdString(env, logPath);
+
+    int ignored_exit_code = 0;
+    const long pid = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, false, &ignored_exit_code);
+    if (pid < 0) {
+        ALOGE("start spawn failed: %ld", pid);
+    } else {
+        ALOGI("started xray pid=%ld", pid);
+    }
+    return static_cast<jlong>(pid);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_awmanager_ui_XrayNativeBridge_stop(
+    JNIEnv* /* env */,
+    jobject /* this */,
+    jlong pid
+) {
+    if (pid <= 0) {
+        return JNI_FALSE;
+    }
+    if (kill(static_cast<pid_t>(pid), SIGTERM) != 0 && errno != ESRCH) {
+        return JNI_FALSE;
+    }
+
+    for (int i = 0; i < 20; ++i) {
+        if (kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH) {
+            return JNI_TRUE;
+        }
+        usleep(100 * 1000);
+    }
+
+    if (kill(static_cast<pid_t>(pid), SIGKILL) != 0 && errno != ESRCH) {
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_awmanager_ui_XrayNativeBridge_isRunning(
+    JNIEnv* /* env */,
+    jobject /* this */,
+    jlong pid
+) {
+    if (pid <= 0) {
+        return JNI_FALSE;
+    }
+    if (kill(static_cast<pid_t>(pid), 0) == 0) {
+        return JNI_TRUE;
+    }
+    return JNI_FALSE;
+}

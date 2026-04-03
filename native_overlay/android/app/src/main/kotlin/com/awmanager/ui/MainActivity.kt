@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private lateinit var bridge: XrayCoreRuntimeBridge
     private var pendingVpnPermissionResult: MethodChannel.Result? = null
+    private val vpnPermissionRequestCode = 9912
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -25,7 +26,6 @@ class MainActivity : FlutterActivity() {
                 "validateConfig" -> executeAsync(result) { bridge.validateConfig(call) }
                 "startCore" -> executeAsync(result) { bridge.startCore(call) }
                 "stopCore" -> executeAsync(result) { bridge.stopCore(call) }
-                "pingProxy" -> executeAsync(result) { bridge.pingProxy(call) }
                 "getCoreStatus" -> executeAsync(result) { bridge.getCoreStatus() }
                 else -> result.error(
                     "XRAY_RUNTIME_ERROR",
@@ -44,20 +44,19 @@ class MainActivity : FlutterActivity() {
         }
         pendingVpnPermissionResult = result
         @Suppress("DEPRECATION")
-        startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
+        startActivityForResult(intent, vpnPermissionRequestCode)
     }
 
-    private fun isVpnPermissionGranted(): Boolean = VpnService.prepare(this) == null
-
-    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == VPN_PERMISSION_REQUEST_CODE) {
+        if (requestCode == vpnPermissionRequestCode) {
             val granted = resultCode == Activity.RESULT_OK
             pendingVpnPermissionResult?.success(granted)
             pendingVpnPermissionResult = null
         }
     }
+
+    private fun isVpnPermissionGranted(): Boolean = VpnService.prepare(this) == null
 
     private fun executeAsync(
         result: MethodChannel.Result,
@@ -77,9 +76,5 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }.start()
-    }
-
-    companion object {
-        private const val VPN_PERMISSION_REQUEST_CODE = 1001
     }
 }

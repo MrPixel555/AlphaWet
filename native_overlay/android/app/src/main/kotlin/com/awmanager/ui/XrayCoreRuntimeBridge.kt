@@ -503,8 +503,7 @@ object XrayCoreRuntimeManager {
                 proc.inputStream.bufferedReader().useLines { sequence ->
                     logFile.parentFile?.mkdirs()
                     sequence.forEach { line ->
-                        logFile.appendText(line + "
-")
+                        logFile.appendText(line + "\n")
                         synchronized(lock) {
                             if (line.isNotBlank()) {
                                 lastMessage = line.trim()

@@ -204,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           BoxShadow(
                             blurRadius: 20,
                             offset: const Offset(0, 8),
-                            color: colors.shadow.withOpacity(0.06),
+                            color: colors.shadow.withValues(alpha: 0.06),
                           ),
                         ],
                       ),
@@ -402,7 +402,7 @@ class _MetricChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withOpacity(0.55),
+        color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

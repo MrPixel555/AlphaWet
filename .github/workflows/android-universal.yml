@@ -39,11 +39,13 @@ jobs:
             --org com.awmanager.ui \
             /tmp/aw_manager_ui
 
-      - name: Copy repo source into generated project
+      - name: Overlay repository source onto generated project
         run: |
-          cp pubspec.yaml /tmp/aw_manager_ui/pubspec.yaml
-          cp analysis_options.yaml /tmp/aw_manager_ui/analysis_options.yaml
-          rsync -av lib/ /tmp/aw_manager_ui/lib/
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='android' \
+            ./ /tmp/aw_manager_ui/
 
       - name: Install dependencies
         working-directory: /tmp/aw_manager_ui

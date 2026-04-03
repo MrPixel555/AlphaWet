@@ -51,15 +51,80 @@ PY2
 fi
 
 mkdir -p "${NATIVE_LIBS_DIR}"
+
+extract_from_release_zip() {
+  local abi="$1"
+  local asset_dest="$2"
+  local zip_candidates=()
+  case "${abi}" in
+    arm64-v8a)
+      zip_candidates=(
+        "${ROOT_DIR}/Xray-android-arm64-v8a.zip"
+        "${ROOT_DIR}/xray-android-arm64-v8a.zip"
+      )
+      ;;
+    x86_64)
+      zip_candidates=(
+        "${ROOT_DIR}/Xray-android-amd64.zip"
+        "${ROOT_DIR}/xray-android-amd64.zip"
+        "${ROOT_DIR}/Xray-android-x86_64.zip"
+        "${ROOT_DIR}/xray-android-x86_64.zip"
+      )
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  local zip_path=""
+  for candidate in "${zip_candidates[@]}"; do
+    if [ -f "${candidate}" ]; then
+      zip_path="${candidate}"
+      break
+    fi
+  done
+
+  if [ -z "${zip_path}" ]; then
+    return 1
+  fi
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"' RETURN
+
+  if ! unzip -q -o "${zip_path}" -d "${tmpdir}"; then
+    echo "[ERROR] Failed to unzip ${zip_path}"
+    return 1
+  fi
+
+  local extracted
+  extracted="$(find "${tmpdir}" -type f \( -name 'xray' -o -name 'xray.exe' \) | head -n 1 || true)"
+  if [ -z "${extracted}" ]; then
+    echo "[ERROR] Could not find xray binary inside ${zip_path}"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "${asset_dest}")"
+  cp "${extracted}" "${asset_dest}"
+  chmod 755 "${asset_dest}"
+  echo "[OK] Extracted $(basename "${zip_path}") -> $(realpath --relative-to="${ROOT_DIR}" "${asset_dest}")"
+}
+
 copy_native_binary() {
   local abi="$1"
   local src="${ROOT_DIR}/assets/xray/android/${abi}/xray"
   local dest_dir="${NATIVE_LIBS_DIR}/${abi}"
   local dest="${dest_dir}/libxraycore.so"
+
+  if [ ! -f "${src}" ]; then
+    extract_from_release_zip "${abi}" "${src}" || true
+  fi
+
   if [ ! -f "${src}" ]; then
     echo "[WARN] Missing ${src}; ${abi} runtime will not be embedded."
     return
   fi
+
   mkdir -p "${dest_dir}"
   cp "${src}" "${dest}"
   chmod 755 "${dest}"

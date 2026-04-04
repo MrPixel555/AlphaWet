@@ -1,10 +1,14 @@
 package com.awmanager.ui
 
 import android.content.Context
-import android.os.Build
 import io.flutter.plugin.common.MethodCall
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +34,61 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         return XrayCoreRuntimeManager.stop(configId)
     }
 
+    fun pingProxy(call: MethodCall): Map<String, Any?> {
+        val httpPort = call.argument<Int>("httpPort") ?: 10808
+        val url = call.argument<String>("url")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: "https://www.google.com/generate_204"
+        val configJson = call.argument<String>("configJson")?.trim().takeUnless { it.isNullOrEmpty() }
+        val configId = call.argument<String>("configId")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: "ping"
+        val displayName = call.argument<String>("displayName")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: configId
+        val targetHost = call.argument<String>("targetHost")?.trim().takeUnless { it.isNullOrEmpty() }
+        val targetPort = call.argument<Int>("targetPort")
+        val socksPort = call.argument<Int>("socksPort") ?: 10809
+
+        if (XrayCoreRuntimeManager.isActiveProxyPort(httpPort)) {
+            return XrayCoreRuntimeManager.pingProxy(httpPort = httpPort, url = url)
+        }
+
+        val packagedBinary = resolvePackagedBinaryOrNull()
+        if (configJson != null && packagedBinary != null) {
+            val bundle = prepareBundleFromRaw(
+                configId = "ping_$configId",
+                displayName = "$displayName (Ping)",
+                configJson = configJson,
+                httpPort = httpPort,
+                socksPort = socksPort,
+                enableDeviceVpn = false,
+                binaryFile = packagedBinary,
+            )
+            return XrayCoreRuntimeManager.pingViaTransientRuntime(bundle = bundle, url = url)
+        }
+
+        if (targetHost != null && targetPort != null) {
+            val fallbackReason = if (packagedBinary == null) {
+                "Packaged Xray runtime was not found, so a direct TCP reachability probe was used instead of a proxy-to-google test."
+            } else {
+                "Xray JSON was unavailable, so a direct TCP reachability probe was used instead of a proxy-to-google test."
+            }
+            return XrayCoreRuntimeManager.pingTargetDirect(
+                host = targetHost,
+                port = targetPort,
+                reason = fallbackReason,
+            )
+        }
+
+        return mapOf(
+            "success" to false,
+            "message" to when {
+                packagedBinary == null ->
+                    "Packaged Xray runtime was not found and no direct host/port fallback was available for ping."
+                else ->
+                    "Ping requires either a running core, a ready Xray config, or a host/port target."
+            },
+        )
+    }
+
     fun getCoreStatus(): Map<String, Any?> = XrayCoreRuntimeManager.status()
 
     private fun prepareBundle(call: MethodCall): RuntimeBundle {
@@ -39,7 +98,27 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         val httpPort = call.argument<Int>("httpPort") ?: 10808
         val socksPort = call.argument<Int>("socksPort") ?: 10809
         val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
+        val binaryFile = resolvePackagedBinary()
+        return prepareBundleFromRaw(
+            configId = configId,
+            displayName = displayName,
+            configJson = configJson,
+            httpPort = httpPort,
+            socksPort = socksPort,
+            enableDeviceVpn = enableDeviceVpn,
+            binaryFile = binaryFile,
+        )
+    }
 
+    private fun prepareBundleFromRaw(
+        configId: String,
+        displayName: String,
+        configJson: String,
+        httpPort: Int,
+        socksPort: Int,
+        enableDeviceVpn: Boolean,
+        binaryFile: File,
+    ): RuntimeBundle {
         val runtimeRoot = File(context.filesDir, "xray_runtime").apply { mkdirs() }
         val configRoot = File(runtimeRoot, "configs").apply { mkdirs() }
         val assetsRoot = File(runtimeRoot, "assets").apply { mkdirs() }
@@ -49,17 +128,11 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         val configFile = File(configRoot, "$configId.json")
         configFile.writeText(configJson)
 
-        val binaryFile = resolvePackagedBinary()
         copyOptionalCommonAsset("geoip.dat", assetsRoot)
         copyOptionalCommonAsset("geosite.dat", assetsRoot)
 
         val logFileName = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_$configId.log"
         val logFile = File(logRoot, logFileName)
-        if (logFile.exists()) {
-            logFile.delete()
-        }
-        logFile.parentFile?.mkdirs()
-        logFile.createNewFile()
 
         return RuntimeBundle(
             configId = configId,
@@ -76,36 +149,44 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     private fun resolvePackagedBinary(): File {
-        val candidates = mutableListOf<File>()
+        return resolvePackagedBinaryOrNull()
+            ?: throw IllegalStateException(buildMissingRuntimeMessage())
+    }
+
+    private fun resolvePackagedBinaryOrNull(): File? {
         val nativeLibraryDir = context.applicationInfo.nativeLibraryDir?.trim().orEmpty()
+        val candidates = mutableListOf<File>()
         if (nativeLibraryDir.isNotEmpty()) {
-            candidates += File(nativeLibraryDir, "libxraycore.so")
-            candidates += File(nativeLibraryDir, "xray")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val rootDir = context.applicationInfo.nativeLibraryRootDir?.trim().orEmpty()
-            if (rootDir.isNotEmpty()) {
-                Build.SUPPORTED_ABIS?.forEach { abi ->
-                    candidates += File(rootDir, "$abi/libxraycore.so")
-                    candidates += File(rootDir, "$abi/xray")
+            val nativeDir = File(nativeLibraryDir)
+            val parent = nativeDir.parentFile
+            candidates += File(nativeDir, "libxraycore.so")
+            candidates += File(nativeDir, "xray")
+            if (parent != null && parent.exists()) {
+                val abiDirNames = sequenceOf(nativeDir.name) + android.os.Build.SUPPORTED_ABIS.asSequence()
+                abiDirNames.distinct().forEach { abi ->
+                    candidates += File(parent, "$abi/libxraycore.so")
+                    candidates += File(parent, "$abi/xray")
                 }
             }
         }
 
-        val winner = candidates.firstOrNull { it.exists() && it.isFile }
+        val winner = candidates.firstOrNull { it.isFile }
         if (winner != null) {
             winner.setReadable(true, false)
             winner.setExecutable(true, false)
             return winner
         }
+        return null
+    }
 
-        throw IllegalStateException(
-            buildString {
-                append("Packaged Xray runtime was not found. Checked: ")
-                append(candidates.joinToString())
-                append(". Ensure tool/prepare_android_runtime.sh copied assets/xray/android/<abi>/xray to android/app/src/main/jniLibs/<abi>/libxraycore.so before building.")
-            },
-        )
+    private fun buildMissingRuntimeMessage(): String {
+        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: "unavailable"
+        val listing = runCatching {
+            File(nativeLibraryDir).list()?.sorted()?.joinToString(", ")
+        }.getOrNull().takeUnless { it.isNullOrBlank() } ?: "(empty or inaccessible)"
+        return "Packaged Xray runtime was not found in nativeLibraryDir ($nativeLibraryDir). Directory listing: $listing. " +
+            "Ensure tool/prepare_android_runtime.sh copied assets/xray/android/arm64-v8a/xray to " +
+            "android/app/src/main/jniLibs/arm64-v8a/libxraycore.so before building."
     }
 
     private fun copyOptionalCommonAsset(fileName: String, assetsRoot: File) {
@@ -178,183 +259,262 @@ object XrayCoreRuntimeManager {
                         append(". Device-VPN mode is only scaffolded in this build.")
                     }
                 },
-                "sessionId" to sessionId,
+                "configId" to bundle.configId,
+                "displayName" to bundle.displayName,
+                "httpPort" to bundle.httpPort,
+                "socksPort" to bundle.socksPort,
+                "deviceVpnMode" to bundle.enableDeviceVpn,
+                "logFilePath" to bundle.logFile.absolutePath,
+                "outputTail" to outputTail,
             )
         } else {
             mapOf(
-                "state" to "failed",
+                "state" to "error",
                 "success" to false,
                 "message" to buildString {
-                    append("Xray rejected the config")
-                    append(" (exit=")
+                    append("Xray rejected the generated config with exit code ")
                     append(exitCode)
-                    append(")")
+                    append(".")
                     if (outputTail.isNotBlank()) {
-                        append(": ")
+                        append("\n")
                         append(outputTail)
                     }
                 },
-                "sessionId" to sessionId,
+                "configId" to bundle.configId,
+                "displayName" to bundle.displayName,
+                "httpPort" to bundle.httpPort,
+                "socksPort" to bundle.socksPort,
+                "deviceVpnMode" to bundle.enableDeviceVpn,
+                "logFilePath" to bundle.logFile.absolutePath,
+                "outputTail" to outputTail,
             )
         }
     }
 
-    fun start(bundle: RuntimeBundle): Map<String, Any?> {
-        synchronized(lock) {
-            stopInternal("Switching runtime.")
-
-            val newSessionId = "xray-${bundle.configId}-${UUID.randomUUID()}"
-            val pid = XrayNativeBridge.start(
-                bundle.binaryFile.absolutePath,
-                bundle.configFile.absolutePath,
-                bundle.assetDir.absolutePath,
-                bundle.workDir.absolutePath,
-                bundle.logFile.absolutePath,
-            )
-            if (pid <= 0L) {
-                return mapOf(
-                    "state" to "failed",
-                    "success" to false,
-                    "message" to "Failed to start Xray native runtime (pid=$pid).",
-                    "sessionId" to null,
-                )
-            }
-
-            activePid = pid
-            sessionId = newSessionId
-            activeConfigId = bundle.configId
-            currentHttpPort = bundle.httpPort
-            currentSocksPort = bundle.socksPort
-            currentDeviceVpnMode = bundle.enableDeviceVpn
-            lastMessage = "Launching Xray core..."
-            lastLogFile = bundle.logFile
-        }
-
-        val ready = waitForPorts(bundle.socksPort, bundle.httpPort)
-        synchronized(lock) {
-            val pid = activePid
-            if (pid == null) {
-                return mapOf(
-                    "state" to "failed",
-                    "success" to false,
-                    "message" to (lastMessage.ifBlank { "Xray native runtime was not retained." }),
-                    "sessionId" to sessionId,
-                )
-            }
-            if (!XrayNativeBridge.isRunning(pid)) {
-                lastMessage = buildFailureMessage()
-                return mapOf(
-                    "state" to "failed",
-                    "success" to false,
-                    "message" to lastMessage,
-                    "sessionId" to sessionId,
-                )
-            }
-
-            lastMessage = if (ready) {
-                buildString {
-                    append("Xray core is running. Local HTTP: 127.0.0.1:")
-                    append(bundle.httpPort)
-                    append(", SOCKS: 127.0.0.1:")
-                    append(bundle.socksPort)
-                    if (bundle.enableDeviceVpn) {
-                        append(". Device-VPN mode was requested, but the native TUN bridge is not implemented yet.")
-                    }
-                }
-            } else {
-                "Xray core process started, but the configured local inbound ports were not confirmed yet."
-            }
-            return mapOf(
-                "state" to "connected",
+    fun start(bundle: RuntimeBundle): Map<String, Any?> = synchronized(lock) {
+        if (activePid != null && XrayNativeBridge.isRunning(activePid!!)) {
+            return@synchronized mapOf(
+                "state" to "running",
                 "success" to true,
-                "message" to lastMessage,
-                "sessionId" to sessionId,
-            )
-        }
-    }
-
-    fun stop(configId: String): Map<String, Any?> {
-        synchronized(lock) {
-            stopInternal("Stopped by user for $configId.")
-            return mapOf(
-                "state" to "idle",
-                "success" to true,
-                "message" to lastMessage,
-                "sessionId" to null,
-            )
-        }
-    }
-
-    fun status(): Map<String, Any?> {
-        synchronized(lock) {
-            val alive = activePid?.let { XrayNativeBridge.isRunning(it) } == true
-            return mapOf(
-                "state" to if (alive) "connected" else "idle",
-                "success" to alive,
-                "message" to lastMessage,
-                "sessionId" to sessionId,
+                "message" to "Xray core is already running.",
                 "configId" to activeConfigId,
+                "sessionId" to sessionId,
                 "httpPort" to currentHttpPort,
                 "socksPort" to currentSocksPort,
-                "deviceVpnRequested" to currentDeviceVpnMode,
-                "pid" to activePid,
+                "deviceVpnMode" to currentDeviceVpnMode,
+                "logFilePath" to lastLogFile?.absolutePath,
             )
         }
+
+        val pid = XrayNativeBridge.start(
+            bundle.binaryFile.absolutePath,
+            bundle.configFile.absolutePath,
+            bundle.assetDir.absolutePath,
+            bundle.workDir.absolutePath,
+            bundle.logFile.absolutePath,
+        )
+        if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
+            val outputTail = tailLog(bundle.logFile)
+            return@synchronized mapOf(
+                "state" to "error",
+                "success" to false,
+                "message" to buildString {
+                    append("Failed to launch Xray core")
+                    if (pid < 0L) {
+                        append(" (errno=")
+                        append(-pid)
+                        append(")")
+                    }
+                    append(".")
+                    if (outputTail.isNotBlank()) {
+                        append("\n")
+                        append(outputTail)
+                    }
+                },
+                "configId" to bundle.configId,
+                "displayName" to bundle.displayName,
+                "httpPort" to bundle.httpPort,
+                "socksPort" to bundle.socksPort,
+                "deviceVpnMode" to bundle.enableDeviceVpn,
+                "logFilePath" to bundle.logFile.absolutePath,
+                "outputTail" to outputTail,
+            )
+        }
+
+        sessionId = UUID.randomUUID().toString()
+        activeConfigId = bundle.configId
+        activePid = pid
+        currentHttpPort = bundle.httpPort
+        currentSocksPort = bundle.socksPort
+        currentDeviceVpnMode = bundle.enableDeviceVpn
+        lastLogFile = bundle.logFile
+        lastMessage = if (bundle.enableDeviceVpn) {
+            "Xray core started. HTTP proxy 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}. Device-VPN mode is scaffolded only."
+        } else {
+            "Xray core started. HTTP proxy 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}."
+        }
+        return@synchronized mapOf(
+            "state" to "running",
+            "success" to true,
+            "message" to lastMessage,
+            "configId" to bundle.configId,
+            "displayName" to bundle.displayName,
+            "sessionId" to sessionId,
+            "httpPort" to bundle.httpPort,
+            "socksPort" to bundle.socksPort,
+            "deviceVpnMode" to bundle.enableDeviceVpn,
+            "logFilePath" to bundle.logFile.absolutePath,
+        )
     }
 
-    private fun stopInternal(reason: String) {
-        activePid?.let { pid ->
-            XrayNativeBridge.stop(pid)
+    fun stop(configId: String): Map<String, Any?> = synchronized(lock) {
+        val pid = activePid
+        if (pid == null) {
+            lastMessage = "No active Xray core session."
+            return@synchronized mapOf(
+                "state" to "stopped",
+                "success" to true,
+                "message" to lastMessage,
+                "configId" to configId,
+            )
         }
+
+        val stopped = XrayNativeBridge.stop(pid)
         activePid = null
         sessionId = null
         activeConfigId = null
         currentDeviceVpnMode = false
-        lastMessage = reason
-    }
-
-    private fun waitForPorts(socksPort: Int, httpPort: Int, timeoutMs: Long = 3000L): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            synchronized(lock) {
-                val pid = activePid
-                if (pid == null || !XrayNativeBridge.isRunning(pid)) {
-                    return false
-                }
-            }
-            if (isLocalPortOpen(socksPort) || isLocalPortOpen(httpPort)) {
-                return true
-            }
-            Thread.sleep(250)
+        lastMessage = if (stopped) {
+            "Xray core stopped."
+        } else {
+            "Failed to stop Xray core cleanly."
         }
-        return false
+        return@synchronized mapOf(
+            "state" to if (stopped) "stopped" else "error",
+            "success" to stopped,
+            "message" to lastMessage,
+            "configId" to configId,
+            "logFilePath" to lastLogFile?.absolutePath,
+        )
     }
 
-    private fun isLocalPortOpen(port: Int): Boolean {
+    fun status(): Map<String, Any?> = synchronized(lock) {
+        val pid = activePid
+        val running = pid != null && XrayNativeBridge.isRunning(pid)
+        if (!running && activePid != null) {
+            activePid = null
+            sessionId = null
+            activeConfigId = null
+        }
+        mapOf(
+            "state" to if (running) "running" else "idle",
+            "success" to true,
+            "message" to if (running) lastMessage else "Xray core is idle.",
+            "configId" to activeConfigId,
+            "sessionId" to sessionId,
+            "httpPort" to currentHttpPort,
+            "socksPort" to currentSocksPort,
+            "deviceVpnMode" to currentDeviceVpnMode,
+            "logFilePath" to lastLogFile?.absolutePath,
+        )
+    }
+
+    fun isActiveProxyPort(httpPort: Int): Boolean = synchronized(lock) {
+        val pid = activePid ?: return@synchronized false
+        XrayNativeBridge.isRunning(pid) && currentHttpPort == httpPort
+    }
+
+    fun pingViaTransientRuntime(bundle: RuntimeBundle, url: String): Map<String, Any?> {
+        val pid = XrayNativeBridge.start(
+            bundle.binaryFile.absolutePath,
+            bundle.configFile.absolutePath,
+            bundle.assetDir.absolutePath,
+            bundle.workDir.absolutePath,
+            bundle.logFile.absolutePath,
+        )
+        if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
+            val outputTail = tailLog(bundle.logFile)
+            return mapOf(
+                "success" to false,
+                "message" to buildString {
+                    append("Failed to launch a transient Xray runtime for ping")
+                    if (pid < 0L) {
+                        append(" (errno=")
+                        append(-pid)
+                        append(")")
+                    }
+                    append(".")
+                    if (outputTail.isNotBlank()) {
+                        append("\n")
+                        append(outputTail)
+                    }
+                },
+                "latencyMs" to null,
+                "logFilePath" to bundle.logFile.absolutePath,
+            )
+        }
+        try {
+            Thread.sleep(750)
+            val result = pingProxy(httpPort = bundle.httpPort, url = url)
+            return result + mapOf("logFilePath" to bundle.logFile.absolutePath)
+        } finally {
+            XrayNativeBridge.stop(pid)
+        }
+    }
+
+    fun pingProxy(httpPort: Int, url: String): Map<String, Any?> {
+        val start = System.nanoTime()
         return try {
-            java.net.Socket().use { socket ->
-                socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 200)
-                true
+            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
+            val connection = (URL(url).openConnection(proxy) as HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+                useCaches = false
             }
-        } catch (_: Exception) {
-            false
+            connection.inputStream.use { it.readBytes() }
+            val latencyMs = ((System.nanoTime() - start) / 1_000_000L).toInt()
+            mapOf(
+                "success" to true,
+                "latencyMs" to latencyMs,
+                "message" to "Proxy latency to $url: ${latencyMs} ms",
+            )
+        } catch (error: Exception) {
+            mapOf(
+                "success" to false,
+                "latencyMs" to null,
+                "message" to "Proxy ping failed: ${error.message ?: error.javaClass.simpleName}",
+            )
         }
     }
 
-    private fun tailLog(logFile: File?): String {
-        if (logFile == null || !logFile.exists()) {
-            return ""
+    fun pingTargetDirect(host: String, port: Int, reason: String): Map<String, Any?> {
+        val start = System.nanoTime()
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 4000)
+            }
+            val latencyMs = ((System.nanoTime() - start) / 1_000_000L).toInt()
+            mapOf(
+                "success" to true,
+                "latencyMs" to latencyMs,
+                "message" to "Direct TCP latency to $host:$port: ${latencyMs} ms\n$reason",
+            )
+        } catch (error: Exception) {
+            mapOf(
+                "success" to false,
+                "latencyMs" to null,
+                "message" to "Direct TCP probe failed for $host:$port: ${error.message ?: error.javaClass.simpleName}\n$reason",
+            )
         }
+    }
+
+    private fun tailLog(file: File, maxChars: Int = 4000): String {
         return runCatching {
-            logFile.readLines().takeLast(6).joinToString(" | ").trim()
+            if (!file.exists()) return@runCatching ""
+            val text = file.readText()
+            if (text.length <= maxChars) text.trim() else text.takeLast(maxChars).trim()
         }.getOrDefault("")
-    }
-
-    private fun buildFailureMessage(): String {
-        val tail = tailLog(lastLogFile)
-        if (tail.isNotEmpty()) {
-            return "Xray core exited early: $tail"
-        }
-        return "Xray core exited before the local proxy ports became available."
     }
 }

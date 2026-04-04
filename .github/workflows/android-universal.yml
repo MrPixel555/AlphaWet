@@ -1,4 +1,4 @@
-name: Build Universal Android APK
+name: Build Android APK
 
 on:
   push:
@@ -69,27 +69,39 @@ jobs:
             echo "[OK] Optional dart-defines were composed from GitHub Secrets."
           fi
 
-      - name: Build universal release APK
+      - name: Build arm64 release APK
         working-directory: ${{ env.BUILD_ROOT }}
-        run: flutter build apk --release ${DART_DEFINE_ARGS}
+        run: flutter build apk --release --split-per-abi --target-platform android-arm64 ${DART_DEFINE_ARGS}
 
       - name: Collect build outputs
         run: |
           mkdir -p dist
-          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-release.apk" \
-            dist/aw-manager-ui-universal-release.apk
+          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" \
+            dist/aw-manager-ui-arm64-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aw-manager-ui-universal-apk
-          path: dist/aw-manager-ui-universal-release.apk
+          name: aw-manager-ui-arm64-apk
+          path: dist/aw-manager-ui-arm64-release.apk
           if-no-files-found: error
+
+      - name: Create trimmed failure snapshot
+        if: failure()
+        run: |
+          mkdir -p dist
+          tar -C "$BUILD_ROOT" -czf dist/aw-manager-ui-failure-snapshot.tgz \
+            --exclude='./build' \
+            --exclude='./.dart_tool' \
+            --exclude='./android/.gradle' \
+            --exclude='./android/app/build' \
+            --exclude='./.git' \
+            .
 
       - name: Upload prepared Android project on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: aw-manager-ui-prepared-project-failure-snapshot
-          path: ${{ env.BUILD_ROOT }}
+          path: dist/aw-manager-ui-failure-snapshot.tgz
           if-no-files-found: ignore

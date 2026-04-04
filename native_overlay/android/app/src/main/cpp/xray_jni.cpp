@@ -15,6 +15,8 @@
 #define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 namespace {
+static constexpr const char* kBridgeClassName = "com/awmanager/ui/XrayNativeBridge";
+
 std::string JStringToStdString(JNIEnv* env, jstring value) {
     if (value == nullptr) {
         return std::string();
@@ -115,10 +117,8 @@ long SpawnXray(
 
     return static_cast<long>(pid);
 }
-}
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_awmanager_ui_XrayNativeBridge_validate(
+jint nativeValidate(
     JNIEnv* env,
     jobject /* this */,
     jstring binaryPath,
@@ -142,8 +142,7 @@ Java_com_awmanager_ui_XrayNativeBridge_validate(
     return static_cast<jint>(exit_code);
 }
 
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_awmanager_ui_XrayNativeBridge_start(
+jlong nativeStart(
     JNIEnv* env,
     jobject /* this */,
     jstring binaryPath,
@@ -168,8 +167,7 @@ Java_com_awmanager_ui_XrayNativeBridge_start(
     return static_cast<jlong>(pid);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_awmanager_ui_XrayNativeBridge_stop(
+jboolean nativeStop(
     JNIEnv* /* env */,
     jobject /* this */,
     jlong pid
@@ -194,8 +192,7 @@ Java_com_awmanager_ui_XrayNativeBridge_stop(
     return JNI_TRUE;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_awmanager_ui_XrayNativeBridge_isRunning(
+jboolean nativeIsRunning(
     JNIEnv* /* env */,
     jobject /* this */,
     jlong pid
@@ -207,4 +204,31 @@ Java_com_awmanager_ui_XrayNativeBridge_isRunning(
         return JNI_TRUE;
     }
     return JNI_FALSE;
+}
+}  // namespace
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /* reserved */) {
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || env == nullptr) {
+        return JNI_ERR;
+    }
+
+    jclass bridge = env->FindClass(kBridgeClassName);
+    if (bridge == nullptr) {
+        ALOGE("failed to find bridge class: %s", kBridgeClassName);
+        return JNI_ERR;
+    }
+
+    static const JNINativeMethod methods[] = {
+        {const_cast<char*>("validate"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I"), reinterpret_cast<void*>(nativeValidate)},
+        {const_cast<char*>("start"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)J"), reinterpret_cast<void*>(nativeStart)},
+        {const_cast<char*>("stop"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(nativeStop)},
+        {const_cast<char*>("isRunning"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(nativeIsRunning)},
+    };
+
+    if (env->RegisterNatives(bridge, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) {
+        ALOGE("RegisterNatives failed for %s", kBridgeClassName);
+        return JNI_ERR;
+    }
+    return JNI_VERSION_1_6;
 }

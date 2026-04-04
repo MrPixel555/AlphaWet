@@ -18,6 +18,10 @@ check_file "${ROOT_DIR}/assets/xray/android/arm64-v8a/xray"
 check_file "${ROOT_DIR}/assets/xray/common/geoip.dat"
 check_file "${ROOT_DIR}/assets/xray/common/geosite.dat"
 
+if [ -f "${ROOT_DIR}/assets/xray/android/x86_64/xray" ]; then
+  echo "[INFO] Optional x86_64 runtime is present. It will be ignored unless AW_INCLUDE_X86_64=1 is set."
+fi
+
 if grep -q 'assets/xray/android/arm64-v8a/' "${ROOT_DIR}/pubspec.yaml" || grep -q 'assets/xray/android/x86_64/' "${ROOT_DIR}/pubspec.yaml"; then
   echo "[ERROR] pubspec.yaml still packages Android Xray binaries as Flutter assets. This duplicates them and inflates APK size."
   fail=1

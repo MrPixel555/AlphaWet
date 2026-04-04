@@ -7,6 +7,7 @@ OVERLAY_CPP_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/cpp"
 ANDROID_DIR="${ROOT_DIR}/android"
 JNI_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 CPP_TARGET_DIR="${ANDROID_DIR}/app/src/main/cpp"
+INCLUDE_X86_64="${AW_INCLUDE_X86_64:-0}"
 
 if [ ! -d "${ANDROID_DIR}" ]; then
   echo "[ERROR] android/ directory was not found. Run flutter create --platforms=android first."
@@ -30,6 +31,7 @@ if [ -z "${PACKAGE_NAME}" ]; then
   echo "[ERROR] Could not determine Android package name from ${MAIN_ACTIVITY_PATH}"
   exit 1
 fi
+PACKAGE_PATH="$(printf '%s' "${PACKAGE_NAME}" | tr '.' '/')"
 
 mkdir -p "${TARGET_KT_DIR}"
 for src in "${OVERLAY_KT_DIR}"/*.kt; do
@@ -40,7 +42,15 @@ done
 echo "[OK] Applied Kotlin overlay to ${TARGET_KT_DIR}"
 
 mkdir -p "${CPP_TARGET_DIR}"
-cp -f "${OVERLAY_CPP_DIR}"/* "${CPP_TARGET_DIR}/"
+for src in "${OVERLAY_CPP_DIR}"/*; do
+  dest="${CPP_TARGET_DIR}/$(basename "${src}")"
+  if [ "$(basename "${src}")" = "xray_jni.cpp" ]; then
+    sed "s#com/awmanager/ui#${PACKAGE_PATH}#g" "${src}" > "${dest}"
+  else
+    cp -f "${src}" "${dest}"
+  fi
+done
+
 echo "[OK] Applied C++ JNI overlay to ${CPP_TARGET_DIR}"
 
 MANIFEST_PATH="${ANDROID_DIR}/app/src/main/AndroidManifest.xml"
@@ -116,8 +126,14 @@ copy_abi() {
   echo "[OK] Copied ${src} -> ${dest}"
 }
 
+rm -rf "${JNI_LIBS_DIR}/x86_64"
 copy_abi arm64-v8a
-copy_abi x86_64
+if [ "${INCLUDE_X86_64}" = "1" ]; then
+  copy_abi x86_64
+  echo "[OK] Included x86_64 runtime because AW_INCLUDE_X86_64=1"
+else
+  echo "[INFO] Skipping x86_64 runtime to keep APK size down. Set AW_INCLUDE_X86_64=1 if you need emulator support."
+fi
 
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
 echo "[OK] JNI-backed Xray runtime overlay applied"

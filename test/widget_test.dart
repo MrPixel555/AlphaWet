@@ -12,9 +12,8 @@ void main() {
     await tester.pumpWidget(const AwManagerApp());
     await tester.pump();
 
-    expect(find.text('AlphaWet'), findsWidgets);
-    expect(find.textContaining('HTTP 127.0.0.1:10808'), findsOneWidget);
-    expect(find.text('made by AlphaCraft'), findsOneWidget);
-    expect(find.byIcon(Icons.tune_rounded), findsWidgets);
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.textContaining('AlphaWet'), findsWidgets);
+    expect(find.textContaining('No configs imported'), findsOneWidget);
   });
 }

@@ -30,20 +30,6 @@ class AwXrayConfigBuilder {
     );
 
     final List<Object> inbounds = <Object>[
-      if (runtimeSettings.enableDeviceVpn)
-        <String, dynamic>{
-          'tag': 'tun-in',
-          'port': 0,
-          'protocol': 'tun',
-          'settings': <String, dynamic>{
-            'name': 'alphawet',
-            'MTU': 1500,
-          },
-          'sniffing': <String, dynamic>{
-            'enabled': true,
-            'destOverride': <String>['http', 'tls', 'quic'],
-          },
-        },
       <String, dynamic>{
         'tag': 'socks-in',
         'listen': '127.0.0.1',
@@ -69,6 +55,20 @@ class AwXrayConfigBuilder {
           'destOverride': <String>['http', 'tls'],
         },
       },
+      if (runtimeSettings.enableDeviceVpn)
+        <String, dynamic>{
+          'tag': 'tun-in',
+          'port': 0,
+          'protocol': 'tun',
+          'settings': <String, dynamic>{
+            'name': 'alphawet',
+            'MTU': 1500,
+          },
+          'sniffing': <String, dynamic>{
+            'enabled': true,
+            'destOverride': <String>['http', 'tls', 'quic'],
+          },
+        },
     ];
 
     final List<Object> routingRules = <Object>[

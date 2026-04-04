@@ -31,6 +31,8 @@ class RuntimeSettings {
 
   String get proxySummary => 'HTTP 127.0.0.1:$httpPort • SOCKS 127.0.0.1:$socksPort';
 
+  String get modeLabel => enableDeviceVpn ? 'Whole device' : 'Local proxy';
+
   String? validate() {
     if (!_isValidPort(httpPort)) {
       return 'HTTP port must be between 1 and 65535.';

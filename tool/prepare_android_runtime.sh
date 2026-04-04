@@ -7,7 +7,7 @@ OVERLAY_CPP_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/cpp"
 ANDROID_DIR="${ROOT_DIR}/android"
 JNI_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 CPP_TARGET_DIR="${ANDROID_DIR}/app/src/main/cpp"
-INCLUDE_X86_64="${AW_INCLUDE_X86_64:-1}"
+INCLUDE_X86_64="${AW_INCLUDE_X86_64:-0}"
 
 if [ ! -d "${ANDROID_DIR}" ]; then
   echo "[ERROR] android/ directory was not found. Run flutter create --platforms=android first."
@@ -59,6 +59,7 @@ if [ -f "${MANIFEST_PATH}" ]; then
 from pathlib import Path
 import re
 import sys
+
 path = Path(sys.argv[1])
 text = path.read_text()
 permissions = [
@@ -66,40 +67,33 @@ permissions = [
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
 ]
-for perm in permissions:
-    if perm not in text:
+for permission in permissions:
+    marker = f'<uses-permission android:name="{permission}" />'
+    if marker not in text:
         needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-        text = text.replace(needle, needle + f'\n    <uses-permission android:name="{perm}" />', 1)
+        text = text.replace(needle, needle + '\n    ' + marker, 1)
+
 if 'android:extractNativeLibs=' not in text:
     text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
-if 'android:label="AlphaWet"' not in text:
-    text = re.sub(r'<application\b([^>]*?)android:label="[^"]*"', r'<application\1android:label="AlphaWet"', text, count=1)
-    if 'android:label="AlphaWet"' not in text:
-        text = re.sub(r'<application\b', '<application android:label="AlphaWet"', text, count=1)
-service_snippet = '''
+
+service_name = '.AlphaWetVpnService'
+if 'AlphaWetVpnService' not in text:
+    service_block = '''
         <service
             android:name=".AlphaWetVpnService"
-            android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="systemExempted"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="systemExempted">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
-        </service>'''
-if 'AlphaWetVpnService' not in text:
-    text = text.replace('</application>', service_snippet + '\n    </application>')
-else:
-    text = re.sub(
-        r'(<service\b[^>]*android:name="\.AlphaWetVpnService"[^>]*)(>)',
-        lambda m: m.group(1) if 'android:foregroundServiceType=' in m.group(1) else m.group(1) + ' android:foregroundServiceType="systemExempted"' + m.group(2),
-        text,
-        count=1,
-        flags=re.DOTALL,
-    )
+        </service>
+'''
+    text = text.replace('</application>', service_block + '    </application>', 1)
+
 path.write_text(text)
 PY
-  echo "[OK] Patched AndroidManifest.xml branding, permissions, and VPN service"
+  echo "[OK] Patched AndroidManifest.xml permissions/service/extraction flags"
 fi
 
 BUILD_KTS="${ANDROID_DIR}/app/build.gradle.kts"
@@ -107,7 +101,6 @@ BUILD_GROOVY="${ANDROID_DIR}/app/build.gradle"
 if [ -f "${BUILD_KTS}" ]; then
   python3 - <<'PY' "${BUILD_KTS}"
 from pathlib import Path
-import re
 import sys
 path = Path(sys.argv[1])
 text = path.read_text()
@@ -157,11 +150,14 @@ copy_abi() {
   echo "[OK] Copied ${src} -> ${dest}"
 }
 
+rm -rf "${JNI_LIBS_DIR}/x86_64"
 copy_abi arm64-v8a
 if [ "${INCLUDE_X86_64}" = "1" ]; then
   copy_abi x86_64
-  echo "[OK] Included x86_64 runtime"
+  echo "[OK] Included x86_64 runtime because AW_INCLUDE_X86_64=1"
+else
+  echo "[INFO] Skipping x86_64 runtime to keep APK size down. Set AW_INCLUDE_X86_64=1 if you need emulator support."
 fi
 
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
-echo "[OK] AlphaWet native runtime overlay applied"
+echo "[OK] JNI-backed Xray runtime overlay applied"

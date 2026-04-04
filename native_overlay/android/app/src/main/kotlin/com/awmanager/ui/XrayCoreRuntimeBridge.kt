@@ -1,6 +1,8 @@
 package com.awmanager.ui
 
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import io.flutter.plugin.common.MethodCall
 import java.io.File
 import java.io.FileOutputStream
@@ -20,26 +22,82 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     fun validateConfig(call: MethodCall): Map<String, Any?> {
-        val bundle = prepareBundle(call)
+        val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
         return XrayCoreRuntimeManager.validate(bundle)
     }
 
     fun startCore(call: MethodCall): Map<String, Any?> {
-        val bundle = prepareBundle(call)
-        val result = XrayCoreRuntimeManager.start(bundle).toMutableMap()
-        if (result["success"] == true && bundle.enableDeviceVpn) {
-            AlphaWetVpnService.start(context, bundle.httpPort, bundle.socksPort)
-            val message = (result["message"] as String? ?: "Connected.").trim()
-            result["message"] = "$message Whole-device tunnel is active."
-            result["deviceVpnActive"] = AlphaWetVpnService.isRunning()
+        val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
+        if (!bundle.enableDeviceVpn) {
+            if (XrayCoreRuntimeManager.isDeviceVpnMode()) {
+                requestVpnServiceStop()
+                waitForStop(timeoutMs = 4_000)
+            }
+            return XrayCoreRuntimeManager.start(bundle = bundle, tunFd = -1)
         }
-        return result
+
+        val intent = Intent(context, AlphaWetVpnService::class.java).apply {
+            action = AlphaWetVpnService.ACTION_START
+            putExtra(RuntimeBundleFactory.EXTRA_CONFIG_ID, bundle.configId)
+            putExtra(RuntimeBundleFactory.EXTRA_DISPLAY_NAME, bundle.displayName)
+            putExtra(RuntimeBundleFactory.EXTRA_CONFIG_JSON, bundle.configFile.readText())
+            putExtra(RuntimeBundleFactory.EXTRA_HTTP_PORT, bundle.httpPort)
+            putExtra(RuntimeBundleFactory.EXTRA_SOCKS_PORT, bundle.socksPort)
+            putExtra(RuntimeBundleFactory.EXTRA_ENABLE_DEVICE_VPN, true)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+
+        val deadline = System.currentTimeMillis() + 8_000L
+        var lastStatus: Map<String, Any?> = XrayCoreRuntimeManager.status()
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(150)
+            lastStatus = XrayCoreRuntimeManager.status()
+            if (lastStatus["state"] == "running" && lastStatus["success"] == true) {
+                return lastStatus
+            }
+            if (lastStatus["state"] == "error") {
+                return lastStatus
+            }
+        }
+
+        return mapOf(
+            "state" to "error",
+            "success" to false,
+            "message" to (
+                lastStatus["message"] as? String
+                    ?: "Timed out while waiting for AlphaWet device tunnel to start."
+                ),
+            "configId" to bundle.configId,
+            "displayName" to bundle.displayName,
+            "httpPort" to bundle.httpPort,
+            "socksPort" to bundle.socksPort,
+            "deviceVpnMode" to true,
+            "logFilePath" to lastStatus["logFilePath"],
+        )
     }
 
     fun stopCore(call: MethodCall): Map<String, Any?> {
         val configId = call.argument<String>("configId") ?: "unknown"
-        AlphaWetVpnService.stop(context)
-        return XrayCoreRuntimeManager.stop(configId)
+        requestVpnServiceStop()
+        val stopped = waitForStop(timeoutMs = 2_500)
+        return if (stopped) {
+            XrayCoreRuntimeManager.stop(configId)
+        } else {
+            XrayCoreRuntimeManager.stop(configId).let { payload ->
+                if (payload["success"] == true) {
+                    payload
+                } else {
+                    payload + mapOf(
+                        "message" to "Failed to stop AlphaWet runtime cleanly.",
+                    )
+                }
+            }
+        }
     }
 
     fun pingProxy(call: MethodCall): Map<String, Any?> {
@@ -59,9 +117,10 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             return XrayCoreRuntimeManager.pingProxy(httpPort = httpPort, url = url)
         }
 
-        val packagedBinary = resolvePackagedBinaryOrNull()
+        val packagedBinary = RuntimeBundleFactory.resolvePackagedBinaryOrNull(context)
         if (configJson != null && packagedBinary != null) {
-            val bundle = prepareBundleFromRaw(
+            val bundle = RuntimeBundleFactory.fromRaw(
+                context = context,
                 configId = "ping_$configId",
                 displayName = "$displayName (Ping)",
                 configJson = configJson,
@@ -97,21 +156,59 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         )
     }
 
-    fun getCoreStatus(): Map<String, Any?> {
-        val status = XrayCoreRuntimeManager.status().toMutableMap()
-        status["deviceVpnActive"] = AlphaWetVpnService.isRunning()
-        return status
+    fun getCoreStatus(): Map<String, Any?> = XrayCoreRuntimeManager.status()
+
+    private fun requestVpnServiceStop() {
+        val intent = Intent(context, AlphaWetVpnService::class.java).apply {
+            action = AlphaWetVpnService.ACTION_STOP
+        }
+        context.startService(intent)
     }
 
-    private fun prepareBundle(call: MethodCall): RuntimeBundle {
+    private fun waitForStop(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val status = XrayCoreRuntimeManager.status()
+            if (status["state"] == "idle" || status["state"] == "stopped") {
+                return true
+            }
+            Thread.sleep(100)
+        }
+        return false
+    }
+}
+
+data class RuntimeBundle(
+    val configId: String,
+    val displayName: String,
+    val configFile: File,
+    val binaryFile: File,
+    val assetDir: File,
+    val workDir: File,
+    val logFile: File,
+    val httpPort: Int,
+    val socksPort: Int,
+    val enableDeviceVpn: Boolean,
+)
+
+object RuntimeBundleFactory {
+    const val EXTRA_CONFIG_ID = "configId"
+    const val EXTRA_DISPLAY_NAME = "displayName"
+    const val EXTRA_CONFIG_JSON = "configJson"
+    const val EXTRA_HTTP_PORT = "httpPort"
+    const val EXTRA_SOCKS_PORT = "socksPort"
+    const val EXTRA_ENABLE_DEVICE_VPN = "enableDeviceVpn"
+
+    fun fromMethodCall(context: Context, call: MethodCall): RuntimeBundle {
         val configId = requireNotNull(call.argument<String>("configId")) { "configId is required." }
         val displayName = (call.argument<String>("displayName") ?: configId).trim()
         val configJson = requireNotNull(call.argument<String>("configJson")) { "configJson is required." }
         val httpPort = call.argument<Int>("httpPort") ?: 10808
         val socksPort = call.argument<Int>("socksPort") ?: 10809
         val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
-        val binaryFile = resolvePackagedBinary()
-        return prepareBundleFromRaw(
+        val binaryFile = resolvePackagedBinary(context)
+        return fromRaw(
+            context = context,
             configId = configId,
             displayName = displayName,
             configJson = configJson,
@@ -122,7 +219,31 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         )
     }
 
-    private fun prepareBundleFromRaw(
+    fun fromIntent(context: Context, intent: Intent): RuntimeBundle {
+        val configId = intent.getStringExtra(EXTRA_CONFIG_ID)?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: throw IllegalArgumentException("configId is required.")
+        val displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME)?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: configId
+        val configJson = intent.getStringExtra(EXTRA_CONFIG_JSON)?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: throw IllegalArgumentException("configJson is required.")
+        val httpPort = intent.getIntExtra(EXTRA_HTTP_PORT, 10808)
+        val socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 10809)
+        val enableDeviceVpn = intent.getBooleanExtra(EXTRA_ENABLE_DEVICE_VPN, true)
+        val binaryFile = resolvePackagedBinary(context)
+        return fromRaw(
+            context = context,
+            configId = configId,
+            displayName = displayName,
+            configJson = configJson,
+            httpPort = httpPort,
+            socksPort = socksPort,
+            enableDeviceVpn = enableDeviceVpn,
+            binaryFile = binaryFile,
+        )
+    }
+
+    fun fromRaw(
+        context: Context,
         configId: String,
         displayName: String,
         configJson: String,
@@ -140,8 +261,8 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         val configFile = File(configRoot, "$configId.json")
         configFile.writeText(configJson)
 
-        copyOptionalCommonAsset("geoip.dat", assetsRoot)
-        copyOptionalCommonAsset("geosite.dat", assetsRoot)
+        copyOptionalCommonAsset(context, "geoip.dat", assetsRoot)
+        copyOptionalCommonAsset(context, "geosite.dat", assetsRoot)
 
         val logFileName = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_$configId.log"
         val logFile = File(logRoot, logFileName)
@@ -160,12 +281,12 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         )
     }
 
-    private fun resolvePackagedBinary(): File {
-        return resolvePackagedBinaryOrNull()
-            ?: throw IllegalStateException(buildMissingRuntimeMessage())
+    fun resolvePackagedBinary(context: Context): File {
+        return resolvePackagedBinaryOrNull(context)
+            ?: throw IllegalStateException(buildMissingRuntimeMessage(context))
     }
 
-    private fun resolvePackagedBinaryOrNull(): File? {
+    fun resolvePackagedBinaryOrNull(context: Context): File? {
         val nativeLibraryDir = context.applicationInfo.nativeLibraryDir?.trim().orEmpty()
         val candidates = mutableListOf<File>()
         if (nativeLibraryDir.isNotEmpty()) {
@@ -174,7 +295,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             candidates += File(nativeDir, "libxraycore.so")
             candidates += File(nativeDir, "xray")
             if (parent != null && parent.exists()) {
-                val abiDirNames = sequenceOf(nativeDir.name) + android.os.Build.SUPPORTED_ABIS.asSequence()
+                val abiDirNames = sequenceOf(nativeDir.name) + Build.SUPPORTED_ABIS.asSequence()
                 abiDirNames.distinct().forEach { abi ->
                     candidates += File(parent, "$abi/libxraycore.so")
                     candidates += File(parent, "$abi/xray")
@@ -191,19 +312,17 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         return null
     }
 
-    private fun buildMissingRuntimeMessage(): String {
+    private fun buildMissingRuntimeMessage(context: Context): String {
         val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: "unavailable"
         val listing = runCatching {
             File(nativeLibraryDir).list()?.sorted()?.joinToString(", ")
         }.getOrNull().takeUnless { it.isNullOrBlank() } ?: "(empty or inaccessible)"
-        return "Packaged Xray runtime was not found in nativeLibraryDir ($nativeLibraryDir). Directory listing: $listing. " +
-            "Ensure tool/prepare_android_runtime.sh copied assets/xray/android/arm64-v8a/xray to " +
-            "android/app/src/main/jniLibs/arm64-v8a/libxraycore.so before building."
+        return "Packaged Xray runtime was not found in nativeLibraryDir ($nativeLibraryDir). Directory listing: $listing. Ensure tool/prepare_android_runtime.sh copied assets/xray/android/arm64-v8a/xray to android/app/src/main/jniLibs/arm64-v8a/libxraycore.so before building."
     }
 
-    private fun copyOptionalCommonAsset(fileName: String, assetsRoot: File) {
+    private fun copyOptionalCommonAsset(context: Context, fileName: String, assetsRoot: File) {
         val assetPath = "flutter_assets/assets/xray/common/$fileName"
-        if (!assetExists(assetPath)) {
+        if (!assetExists(context, assetPath)) {
             return
         }
         val target = File(assetsRoot, fileName)
@@ -214,7 +333,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
         target.setWritable(true, true)
     }
 
-    private fun assetExists(assetPath: String): Boolean {
+    private fun assetExists(context: Context, assetPath: String): Boolean {
         return try {
             context.assets.open(assetPath).close()
             true
@@ -224,24 +343,12 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 }
 
-data class RuntimeBundle(
-    val configId: String,
-    val displayName: String,
-    val configFile: File,
-    val binaryFile: File,
-    val assetDir: File,
-    val workDir: File,
-    val logFile: File,
-    val httpPort: Int,
-    val socksPort: Int,
-    val enableDeviceVpn: Boolean,
-)
-
 object XrayCoreRuntimeManager {
     private val lock = Any()
     private var sessionId: String? = null
     private var activeConfigId: String? = null
     private var activePid: Long? = null
+    private var lastState: String = "idle"
     private var lastMessage: String = "Idle."
     private var lastLogFile: File? = null
     private var currentHttpPort: Int = 10808
@@ -258,6 +365,11 @@ object XrayCoreRuntimeManager {
         )
         val outputTail = tailLog(bundle.logFile)
         return if (exitCode == 0) {
+            synchronized(lock) {
+                lastState = "ready"
+                lastMessage = "Xray accepted the generated config. Ready to launch the core."
+                lastLogFile = bundle.logFile
+            }
             mapOf(
                 "state" to "ready",
                 "success" to true,
@@ -268,7 +380,7 @@ object XrayCoreRuntimeManager {
                     append(", SOCKS 127.0.0.1:")
                     append(bundle.socksPort)
                     if (bundle.enableDeviceVpn) {
-                        append(". Whole-device tunnel is requested.")
+                        append(". AlphaWet will use a full-device TUN session on connect.")
                     }
                 },
                 "configId" to bundle.configId,
@@ -280,18 +392,22 @@ object XrayCoreRuntimeManager {
                 "outputTail" to outputTail,
             )
         } else {
-            mapOf(
-                "state" to "error",
-                "success" to false,
-                "message" to buildString {
+            recordFailure(
+                message = buildString {
                     append("Xray rejected the generated config with exit code ")
                     append(exitCode)
-                    append(".")
+                    append('.')
                     if (outputTail.isNotBlank()) {
-                        append("\n")
+                        append('\n')
                         append(outputTail)
                     }
                 },
+                logFile = bundle.logFile,
+            )
+            mapOf(
+                "state" to "error",
+                "success" to false,
+                "message" to lastMessage,
                 "configId" to bundle.configId,
                 "displayName" to bundle.displayName,
                 "httpPort" to bundle.httpPort,
@@ -303,19 +419,18 @@ object XrayCoreRuntimeManager {
         }
     }
 
-    fun start(bundle: RuntimeBundle): Map<String, Any?> = synchronized(lock) {
-        if (activePid != null && XrayNativeBridge.isRunning(activePid!!)) {
-            return@synchronized mapOf(
-                "state" to "running",
-                "success" to true,
-                "message" to "Xray core is already running.",
-                "configId" to activeConfigId,
-                "sessionId" to sessionId,
-                "httpPort" to currentHttpPort,
-                "socksPort" to currentSocksPort,
-                "deviceVpnMode" to currentDeviceVpnMode,
-                "logFilePath" to lastLogFile?.absolutePath,
-            )
+    fun start(bundle: RuntimeBundle, tunFd: Int = -1): Map<String, Any?> = synchronized(lock) {
+        val runningPid = activePid
+        if (runningPid != null && XrayNativeBridge.isRunning(runningPid)) {
+            XrayNativeBridge.stop(runningPid)
+            clearSessionState()
+        }
+
+        lastState = "connecting"
+        lastMessage = if (bundle.enableDeviceVpn) {
+            "Starting AlphaWet full-device tunnel..."
+        } else {
+            "Starting AlphaWet local proxy..."
         }
 
         val pid = XrayNativeBridge.start(
@@ -324,26 +439,30 @@ object XrayCoreRuntimeManager {
             bundle.assetDir.absolutePath,
             bundle.workDir.absolutePath,
             bundle.logFile.absolutePath,
-            -1,
+            tunFd,
         )
         if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
             val outputTail = tailLog(bundle.logFile)
-            return@synchronized mapOf(
-                "state" to "error",
-                "success" to false,
-                "message" to buildString {
+            recordFailure(
+                message = buildString {
                     append("Failed to launch Xray core")
                     if (pid < 0L) {
                         append(" (errno=")
                         append(-pid)
-                        append(")")
+                        append(')')
                     }
-                    append(".")
+                    append('.')
                     if (outputTail.isNotBlank()) {
-                        append("\n")
+                        append('\n')
                         append(outputTail)
                     }
                 },
+                logFile = bundle.logFile,
+            )
+            return@synchronized mapOf(
+                "state" to "error",
+                "success" to false,
+                "message" to lastMessage,
                 "configId" to bundle.configId,
                 "displayName" to bundle.displayName,
                 "httpPort" to bundle.httpPort,
@@ -361,10 +480,11 @@ object XrayCoreRuntimeManager {
         currentSocksPort = bundle.socksPort
         currentDeviceVpnMode = bundle.enableDeviceVpn
         lastLogFile = bundle.logFile
+        lastState = "running"
         lastMessage = if (bundle.enableDeviceVpn) {
-            "Xray core started. HTTP proxy 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}. Whole-device tunnel is enabled."
+            "AlphaWet full-device tunnel is active. HTTP 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}."
         } else {
-            "Xray core started. HTTP proxy 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}."
+            "AlphaWet local proxy is active. HTTP 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}."
         }
         return@synchronized mapOf(
             "state" to "running",
@@ -383,6 +503,7 @@ object XrayCoreRuntimeManager {
     fun stop(configId: String): Map<String, Any?> = synchronized(lock) {
         val pid = activePid
         if (pid == null) {
+            lastState = "idle"
             lastMessage = "No active Xray core session."
             return@synchronized mapOf(
                 "state" to "stopped",
@@ -393,17 +514,15 @@ object XrayCoreRuntimeManager {
         }
 
         val stopped = XrayNativeBridge.stop(pid)
-        activePid = null
-        sessionId = null
-        activeConfigId = null
-        currentDeviceVpnMode = false
+        clearSessionState()
+        lastState = if (stopped) "stopped" else "error"
         lastMessage = if (stopped) {
             "Xray core stopped."
         } else {
             "Failed to stop Xray core cleanly."
         }
         return@synchronized mapOf(
-            "state" to if (stopped) "stopped" else "error",
+            "state" to lastState,
             "success" to stopped,
             "message" to lastMessage,
             "configId" to configId,
@@ -415,14 +534,16 @@ object XrayCoreRuntimeManager {
         val pid = activePid
         val running = pid != null && XrayNativeBridge.isRunning(pid)
         if (!running && activePid != null) {
-            activePid = null
-            sessionId = null
-            activeConfigId = null
+            clearSessionState()
+            if (lastState != "stopped") {
+                lastState = "error"
+                lastMessage = "Xray core stopped unexpectedly."
+            }
         }
         mapOf(
-            "state" to if (running) "running" else "idle",
-            "success" to true,
-            "message" to if (running) lastMessage else "Xray core is idle.",
+            "state" to if (running) "running" else lastState,
+            "success" to (running || lastState != "error"),
+            "message" to if (running) lastMessage else lastMessage,
             "configId" to activeConfigId,
             "sessionId" to sessionId,
             "httpPort" to currentHttpPort,
@@ -435,6 +556,20 @@ object XrayCoreRuntimeManager {
     fun isActiveProxyPort(httpPort: Int): Boolean = synchronized(lock) {
         val pid = activePid ?: return@synchronized false
         XrayNativeBridge.isRunning(pid) && currentHttpPort == httpPort
+    }
+
+    fun isDeviceVpnMode(): Boolean = synchronized(lock) {
+        val pid = activePid ?: return@synchronized false
+        currentDeviceVpnMode && XrayNativeBridge.isRunning(pid)
+    }
+
+    fun recordFailure(message: String, logFile: File? = null) = synchronized(lock) {
+        clearSessionState()
+        lastState = "error"
+        lastMessage = message
+        if (logFile != null) {
+            lastLogFile = logFile
+        }
     }
 
     fun pingViaTransientRuntime(bundle: RuntimeBundle, url: String): Map<String, Any?> {
@@ -455,11 +590,11 @@ object XrayCoreRuntimeManager {
                     if (pid < 0L) {
                         append(" (errno=")
                         append(-pid)
-                        append(")")
+                        append(')')
                     }
-                    append(".")
+                    append('.')
                     if (outputTail.isNotBlank()) {
-                        append("\n")
+                        append('\n')
                         append(outputTail)
                     }
                 },
@@ -481,8 +616,8 @@ object XrayCoreRuntimeManager {
         return try {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
             val connection = (URL(url).openConnection(proxy) as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
+                connectTimeout = 4_000
+                readTimeout = 4_000
                 requestMethod = "GET"
                 instanceFollowRedirects = true
                 useCaches = false
@@ -507,7 +642,7 @@ object XrayCoreRuntimeManager {
         val start = System.nanoTime()
         return try {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(host, port), 4000)
+                socket.connect(InetSocketAddress(host, port), 4_000)
             }
             val latencyMs = ((System.nanoTime() - start) / 1_000_000L).toInt()
             mapOf(
@@ -524,7 +659,14 @@ object XrayCoreRuntimeManager {
         }
     }
 
-    private fun tailLog(file: File, maxChars: Int = 4000): String {
+    private fun clearSessionState() {
+        activePid = null
+        sessionId = null
+        activeConfigId = null
+        currentDeviceVpnMode = false
+    }
+
+    private fun tailLog(file: File, maxChars: Int = 4_000): String {
         return runCatching {
             if (!file.exists()) return@runCatching ""
             val text = file.readText()

@@ -57,9 +57,9 @@ long SpawnXray(
     const std::string& asset_dir,
     const std::string& working_dir,
     const std::string& log_path,
-    int tun_fd,
     bool validate_only,
-    int* validation_exit_code
+    int* validation_exit_code,
+    int tun_fd
 ) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -75,11 +75,20 @@ long SpawnXray(
             _exit(120);
         }
         setenv("XRAY_LOCATION_ASSET", asset_dir.c_str(), 1);
-        if (tun_fd >= 0) {
-            std::string tun_fd_value = std::to_string(tun_fd);
-            setenv("XRAY_TUN_FD", tun_fd_value.c_str(), 1);
-        }
         chmod(binary_path.c_str(), 0755);
+
+        if (tun_fd >= 0) {
+            const int current_flags = fcntl(tun_fd, F_GETFD);
+            if (current_flags >= 0) {
+                fcntl(tun_fd, F_SETFD, current_flags & ~FD_CLOEXEC);
+            }
+            const std::string tun_fd_string = std::to_string(tun_fd);
+            setenv("XRAY_TUN_FD", tun_fd_string.c_str(), 1);
+            setenv("xray.tun.fd", tun_fd_string.c_str(), 1);
+        } else {
+            unsetenv("XRAY_TUN_FD");
+            unsetenv("xray.tun.fd");
+        }
 
         if (validate_only) {
             execl(
@@ -139,7 +148,7 @@ jint nativeValidate(
     const std::string log_path = JStringToStdString(env, logPath);
 
     int exit_code = 1;
-    const long result = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, -1, true, &exit_code);
+    const long result = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, true, &exit_code, -1);
     if (result < 0) {
         ALOGE("validate spawn failed: %ld", result);
         return static_cast<jint>(-1 * result);
@@ -164,16 +173,7 @@ jlong nativeStart(
     const std::string log_path = JStringToStdString(env, logPath);
 
     int ignored_exit_code = 0;
-    const long pid = SpawnXray(
-        binary_path,
-        config_path,
-        asset_dir,
-        working_dir,
-        log_path,
-        static_cast<int>(tunFd),
-        false,
-        &ignored_exit_code
-    );
+    const long pid = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, false, &ignored_exit_code, static_cast<int>(tunFd));
     if (pid < 0) {
         ALOGE("start spawn failed: %ld", pid);
     } else {

@@ -9,14 +9,12 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
-import java.net.ServerSocket
+import java.net.Socket
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import org.json.JSONArray
-import org.json.JSONObject
 
 class XrayCoreRuntimeBridge(private val context: Context) {
     companion object {
@@ -25,27 +23,11 @@ class XrayCoreRuntimeBridge(private val context: Context) {
 
     fun validateConfig(call: MethodCall): Map<String, Any?> {
         val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
-        val occupiedPorts = detectOccupiedProxyPorts(bundle)
-        if (occupiedPorts.isNotEmpty()) {
-            return busyPortPayload(
-                bundle = bundle,
-                occupiedPorts = occupiedPorts,
-                action = "validate",
-            )
-        }
         return XrayCoreRuntimeManager.validate(bundle)
     }
 
     fun startCore(call: MethodCall): Map<String, Any?> {
         val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
-        val occupiedPorts = detectOccupiedProxyPorts(bundle)
-        if (occupiedPorts.isNotEmpty()) {
-            return busyPortPayload(
-                bundle = bundle,
-                occupiedPorts = occupiedPorts,
-                action = "start",
-            )
-        }
         if (!bundle.enableDeviceVpn) {
             if (XrayCoreRuntimeManager.isDeviceVpnMode()) {
                 requestVpnServiceStop()
@@ -119,8 +101,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     fun pingProxy(call: MethodCall): Map<String, Any?> {
-        val requestedHttpPort = call.argument<Int>("httpPort") ?: 10808
-        val requestedSocksPort = call.argument<Int>("socksPort") ?: 10809
+        val httpPort = call.argument<Int>("httpPort") ?: 10808
         val url = call.argument<String>("url")?.trim().takeUnless { it.isNullOrEmpty() }
             ?: "https://www.google.com/generate_204"
         val configJson = call.argument<String>("configJson")?.trim().takeUnless { it.isNullOrEmpty() }
@@ -128,165 +109,54 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             ?: "ping"
         val displayName = call.argument<String>("displayName")?.trim().takeUnless { it.isNullOrEmpty() }
             ?: configId
+        val targetHost = call.argument<String>("targetHost")?.trim().takeUnless { it.isNullOrEmpty() }
+        val targetPort = call.argument<Int>("targetPort")
+        val socksPort = call.argument<Int>("socksPort") ?: 10809
 
-        if (XrayCoreRuntimeManager.isActiveProxyPort(requestedHttpPort)) {
-            return XrayCoreRuntimeManager.pingProxy(httpPort = requestedHttpPort, url = url)
+        if (XrayCoreRuntimeManager.isActiveProxyPort(httpPort)) {
+            return XrayCoreRuntimeManager.pingProxy(httpPort = httpPort, url = url)
         }
 
         val packagedBinary = RuntimeBundleFactory.resolvePackagedBinaryOrNull(context)
         if (configJson != null && packagedBinary != null) {
-            val tempHttpPort = findAvailablePort(exclude = emptySet())
-                ?: return mapOf(
-                    "success" to false,
-                    "message" to "AlphaWet could not reserve a temporary HTTP port for ping.",
-                )
-            val tempSocksPort = findAvailablePort(exclude = setOf(tempHttpPort))
-                ?: return mapOf(
-                    "success" to false,
-                    "message" to "AlphaWet could not reserve a temporary SOCKS port for ping.",
-                )
-            val pingConfigJson = buildGooglePingConfigJson(
-                originalConfigJson = configJson,
-                httpPort = tempHttpPort,
-                socksPort = tempSocksPort,
-            )
             val bundle = RuntimeBundleFactory.fromRaw(
                 context = context,
                 configId = "ping_$configId",
                 displayName = "$displayName (Ping)",
-                configJson = pingConfigJson,
-                httpPort = tempHttpPort,
-                socksPort = tempSocksPort,
+                configJson = configJson,
+                httpPort = httpPort,
+                socksPort = socksPort,
                 enableDeviceVpn = false,
                 binaryFile = packagedBinary,
             )
             return XrayCoreRuntimeManager.pingViaTransientRuntime(bundle = bundle, url = url)
         }
 
+        if (targetHost != null && targetPort != null) {
+            val fallbackReason = if (packagedBinary == null) {
+                "Packaged Xray runtime was not found, so a direct TCP reachability probe was used instead of a proxy-to-google test."
+            } else {
+                "Xray JSON was unavailable, so a direct TCP reachability probe was used instead of a proxy-to-google test."
+            }
+            return XrayCoreRuntimeManager.pingTargetDirect(
+                host = targetHost,
+                port = targetPort,
+                reason = fallbackReason,
+            )
+        }
+
         return mapOf(
             "success" to false,
-            "message" to "Ping requires a ready config and the packaged Xray runtime so AlphaWet can probe google.com through that config.",
+            "message" to when {
+                packagedBinary == null ->
+                    "Packaged Xray runtime was not found and no direct host/port fallback was available for ping."
+                else ->
+                    "Ping requires either a running core, a ready Xray config, or a host/port target."
+            },
         )
     }
 
     fun getCoreStatus(): Map<String, Any?> = XrayCoreRuntimeManager.status()
-
-    private fun detectOccupiedProxyPorts(bundle: RuntimeBundle): List<Int> {
-        if (bundle.enableDeviceVpn) {
-            return emptyList()
-        }
-        val candidates = linkedSetOf(bundle.httpPort, bundle.socksPort)
-        return candidates.filter { port -> isPortOccupied(port) }
-    }
-
-    private fun busyPortPayload(
-        bundle: RuntimeBundle,
-        occupiedPorts: List<Int>,
-        action: String,
-    ): Map<String, Any?> {
-        val message = buildString {
-            append("AlphaWet could not ")
-            append(action)
-            append(" because these local ports are already busy: ")
-            append(occupiedPorts.joinToString(", "))
-            append(". Free the port and try again.")
-        }
-        XrayCoreRuntimeManager.recordFailure(message = message, logFile = bundle.logFile)
-        return mapOf(
-            "state" to "error",
-            "success" to false,
-            "message" to message,
-            "configId" to bundle.configId,
-            "displayName" to bundle.displayName,
-            "httpPort" to bundle.httpPort,
-            "socksPort" to bundle.socksPort,
-            "deviceVpnMode" to bundle.enableDeviceVpn,
-            "logFilePath" to bundle.logFile.absolutePath,
-        )
-    }
-
-    private fun isPortOccupied(port: Int): Boolean {
-        return try {
-            ServerSocket().use { server ->
-                server.reuseAddress = false
-                server.bind(InetSocketAddress("127.0.0.1", port))
-            }
-            false
-        } catch (_: Exception) {
-            true
-        }
-    }
-
-    private fun findAvailablePort(exclude: Set<Int>): Int? {
-        repeat(12) {
-            val port = try {
-                ServerSocket(0).use { server -> server.localPort }
-            } catch (_: Exception) {
-                -1
-            }
-            if (port in 1..65535 && port !in exclude && !isPortOccupied(port)) {
-                return port
-            }
-        }
-        return null
-    }
-
-    private fun buildGooglePingConfigJson(
-        originalConfigJson: String,
-        httpPort: Int,
-        socksPort: Int,
-    ): String {
-        return try {
-            val root = JSONObject(originalConfigJson)
-            val inbounds = JSONArray()
-                .put(
-                    JSONObject()
-                        .put("tag", "socks-in")
-                        .put("listen", "127.0.0.1")
-                        .put("port", socksPort)
-                        .put("protocol", "socks")
-                        .put(
-                            "settings",
-                            JSONObject()
-                                .put("udp", true)
-                                .put("auth", "noauth"),
-                        )
-                        .put(
-                            "sniffing",
-                            JSONObject()
-                                .put("enabled", true)
-                                .put("destOverride", JSONArray(listOf("http", "tls", "quic"))),
-                        ),
-                )
-                .put(
-                    JSONObject()
-                        .put("tag", "http-in")
-                        .put("listen", "127.0.0.1")
-                        .put("port", httpPort)
-                        .put("protocol", "http")
-                        .put("settings", JSONObject())
-                        .put(
-                            "sniffing",
-                            JSONObject()
-                                .put("enabled", true)
-                                .put("destOverride", JSONArray(listOf("http", "tls"))),
-                        ),
-                )
-            root.put("inbounds", inbounds)
-            root.put(
-                "awManagerRuntime",
-                JSONObject()
-                    .put("httpPort", httpPort)
-                    .put("socksPort", socksPort)
-                    .put("deviceVpnRequested", false)
-                    .put("mode", "proxy")
-                    .put("pingOnly", true),
-            )
-            root.toString()
-        } catch (_: Exception) {
-            originalConfigJson
-        }
-    }
 
     private fun requestVpnServiceStop() {
         val intent = Intent(context, AlphaWetVpnService::class.java).apply {
@@ -771,7 +641,7 @@ object XrayCoreRuntimeManager {
     fun pingTargetDirect(host: String, port: Int, reason: String): Map<String, Any?> {
         val start = System.nanoTime()
         return try {
-            Socket().use { socket ->
+            java.net.Socket().use { socket ->
                 socket.connect(InetSocketAddress(host, port), 4_000)
             }
             val latencyMs = ((System.nanoTime() - start) / 1_000_000L).toInt()

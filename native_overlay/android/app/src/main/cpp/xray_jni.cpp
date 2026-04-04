@@ -57,6 +57,7 @@ long SpawnXray(
     const std::string& asset_dir,
     const std::string& working_dir,
     const std::string& log_path,
+    int tun_fd,
     bool validate_only,
     int* validation_exit_code
 ) {
@@ -74,6 +75,10 @@ long SpawnXray(
             _exit(120);
         }
         setenv("XRAY_LOCATION_ASSET", asset_dir.c_str(), 1);
+        if (tun_fd >= 0) {
+            std::string tun_fd_value = std::to_string(tun_fd);
+            setenv("XRAY_TUN_FD", tun_fd_value.c_str(), 1);
+        }
         chmod(binary_path.c_str(), 0755);
 
         if (validate_only) {
@@ -134,7 +139,7 @@ jint nativeValidate(
     const std::string log_path = JStringToStdString(env, logPath);
 
     int exit_code = 1;
-    const long result = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, true, &exit_code);
+    const long result = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, -1, true, &exit_code);
     if (result < 0) {
         ALOGE("validate spawn failed: %ld", result);
         return static_cast<jint>(-1 * result);
@@ -149,7 +154,8 @@ jlong nativeStart(
     jstring configPath,
     jstring assetDir,
     jstring workingDir,
-    jstring logPath
+    jstring logPath,
+    jint tunFd
 ) {
     const std::string binary_path = JStringToStdString(env, binaryPath);
     const std::string config_path = JStringToStdString(env, configPath);
@@ -158,11 +164,20 @@ jlong nativeStart(
     const std::string log_path = JStringToStdString(env, logPath);
 
     int ignored_exit_code = 0;
-    const long pid = SpawnXray(binary_path, config_path, asset_dir, working_dir, log_path, false, &ignored_exit_code);
+    const long pid = SpawnXray(
+        binary_path,
+        config_path,
+        asset_dir,
+        working_dir,
+        log_path,
+        static_cast<int>(tunFd),
+        false,
+        &ignored_exit_code
+    );
     if (pid < 0) {
         ALOGE("start spawn failed: %ld", pid);
     } else {
-        ALOGI("started xray pid=%ld", pid);
+        ALOGI("started xray pid=%ld tunFd=%d", pid, static_cast<int>(tunFd));
     }
     return static_cast<jlong>(pid);
 }
@@ -221,7 +236,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /* reserved */) {
 
     static const JNINativeMethod methods[] = {
         {const_cast<char*>("validate"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I"), reinterpret_cast<void*>(nativeValidate)},
-        {const_cast<char*>("start"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)J"), reinterpret_cast<void*>(nativeStart)},
+        {const_cast<char*>("start"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)J"), reinterpret_cast<void*>(nativeStart)},
         {const_cast<char*>("stop"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(nativeStop)},
         {const_cast<char*>("isRunning"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(nativeIsRunning)},
     };

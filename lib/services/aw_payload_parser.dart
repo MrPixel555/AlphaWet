@@ -110,7 +110,7 @@ class AwPayloadParser {
 
     _logger.info(
       _tag,
-      'URI payload parsed. protocol=${profile.protocol}, security=${profile.security}, network=${profile.network}',
+      'URI payload parsed successfully.',
     );
 
     return ParsedAwPayload(
@@ -264,7 +264,7 @@ class AwPayloadParser {
 
     _logger.info(
       _tag,
-      'JSON payload parsed. protocol=${profile.protocol}, security=${profile.security}, network=${profile.network}',
+      'JSON payload parsed successfully.',
     );
 
     return ParsedAwPayload(

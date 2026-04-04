@@ -16,11 +16,11 @@ extension VpnConnectionStateX on VpnConnectionState {
       case VpnConnectionState.validating:
         return 'Validating';
       case VpnConnectionState.ready:
-        return 'Ready';
+        return 'Prepared';
       case VpnConnectionState.connecting:
         return 'Connecting';
       case VpnConnectionState.connected:
-        return 'Connected';
+        return 'Active';
       case VpnConnectionState.disconnecting:
         return 'Disconnecting';
       case VpnConnectionState.failed:

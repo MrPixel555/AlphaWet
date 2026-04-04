@@ -26,6 +26,7 @@ class MainActivity : FlutterActivity() {
                 "validateConfig" -> executeAsync(result) { bridge.validateConfig(call) }
                 "startCore" -> executeAsync(result) { bridge.startCore(call) }
                 "stopCore" -> executeAsync(result) { bridge.stopCore(call) }
+                "pingProxy" -> executeAsync(result) { bridge.pingProxy(call) }
                 "getCoreStatus" -> executeAsync(result) { bridge.getCoreStatus() }
                 else -> result.error(
                     "XRAY_RUNTIME_ERROR",

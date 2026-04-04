@@ -1,5 +1,5 @@
-import 'package:aw_manager_ui/models/aw_profile_models.dart';
-import 'package:aw_manager_ui/services/aw_payload_parser.dart';
+import 'package:alpha_wet/models/aw_profile_models.dart';
+import 'package:alpha_wet/services/aw_payload_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

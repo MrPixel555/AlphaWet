@@ -11,7 +11,7 @@ import 'vpn_engine.dart';
 class XrayCoreVpnEngine implements VpnEngine {
   XrayCoreVpnEngine({AppLogger? logger}) : _logger = logger ?? AppLogger.instance;
 
-  static const MethodChannel _channel = MethodChannel('aw_manager_ui/xray_core');
+  static const MethodChannel _channel = MethodChannel('alphawet/xray_core');
   static const String _tag = 'XrayCoreVpnEngine';
   final AppLogger _logger;
 
@@ -81,7 +81,7 @@ class XrayCoreVpnEngine implements VpnEngine {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,
         success: false,
-        message: 'Device-wide VPN mode was requested, but Android VPN permission is not granted yet.',
+        message: 'Full-device VPN was requested, but Android VPN permission is not granted yet.',
       );
     }
     try {
@@ -120,7 +120,7 @@ class XrayCoreVpnEngine implements VpnEngine {
       return const VpnEngineResult(
         state: VpnConnectionState.idle,
         success: true,
-        message: 'Mock runtime stopped on this non-Android platform.',
+        message: 'Preview runtime stopped on this non-Android platform.',
       );
     }
     try {

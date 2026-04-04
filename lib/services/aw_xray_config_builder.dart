@@ -16,10 +16,7 @@ class AwXrayConfigBuilder {
     AwConnectionProfile profile, {
     RuntimeSettings runtimeSettings = RuntimeSettings.defaults,
   }) {
-    _logger.info(
-      _tag,
-      'Building Xray config. protocol=${profile.protocol}, security=${profile.security}, network=${profile.network}',
-    );
+    _logger.info(_tag, 'Building Xray config for ${profile.displayName}.');
 
     _validateProfile(profile);
 
@@ -28,12 +25,13 @@ class AwXrayConfigBuilder {
       profile: profile,
       outboundTag: outboundTag,
     );
+    final List<Object> inbounds = _buildInbounds(runtimeSettings: runtimeSettings);
 
     final Map<String, dynamic> config = <String, dynamic>{
-      'awManagerRuntime': <String, dynamic>{
+      'alphaWetRuntime': <String, dynamic>{
         'httpPort': runtimeSettings.httpPort,
         'socksPort': runtimeSettings.socksPort,
-        'deviceVpnRequested': runtimeSettings.enableDeviceVpn,
+        'deviceVpnEnabled': runtimeSettings.enableDeviceVpn,
       },
       'log': <String, dynamic>{
         'loglevel': 'warning',
@@ -46,33 +44,7 @@ class AwXrayConfigBuilder {
         ],
         'queryStrategy': 'UseIP',
       },
-      'inbounds': <Object>[
-        <String, dynamic>{
-          'tag': 'socks-in',
-          'listen': '127.0.0.1',
-          'port': runtimeSettings.socksPort,
-          'protocol': 'socks',
-          'settings': <String, dynamic>{
-            'udp': true,
-            'auth': 'noauth',
-          },
-          'sniffing': <String, dynamic>{
-            'enabled': true,
-            'destOverride': <String>['http', 'tls', 'quic'],
-          },
-        },
-        <String, dynamic>{
-          'tag': 'http-in',
-          'listen': '127.0.0.1',
-          'port': runtimeSettings.httpPort,
-          'protocol': 'http',
-          'settings': <String, dynamic>{},
-          'sniffing': <String, dynamic>{
-            'enabled': true,
-            'destOverride': <String>['http', 'tls'],
-          },
-        },
-      ],
+      'inbounds': inbounds,
       'outbounds': <Object>[
         outbound,
         <String, dynamic>{
@@ -104,6 +76,12 @@ class AwXrayConfigBuilder {
             'protocol': <String>['bittorrent'],
             'outboundTag': 'block',
           },
+          if (runtimeSettings.enableDeviceVpn)
+            <String, dynamic>{
+              'type': 'field',
+              'inboundTag': <String>['tun-in'],
+              'outboundTag': outboundTag,
+            },
         ],
       },
     };
@@ -111,16 +89,66 @@ class AwXrayConfigBuilder {
     final JsonEncoder encoder = const JsonEncoder.withIndent('  ');
     final String prettyJson = encoder.convert(config);
 
-    _logger.info(
-      _tag,
-      'Xray config ready. outboundTag=$outboundTag, bytes=${prettyJson.length}',
-    );
+    _logger.info(_tag, 'Xray config ready. bytes=${prettyJson.length}');
 
     return AwXrayBuildResult(
       config: config,
       prettyJson: prettyJson,
       primaryOutboundTag: outboundTag,
     );
+  }
+
+  List<Object> _buildInbounds({required RuntimeSettings runtimeSettings}) {
+    final List<Object> inbounds = <Object>[
+      <String, dynamic>{
+        'tag': 'socks-in',
+        'listen': '127.0.0.1',
+        'port': runtimeSettings.socksPort,
+        'protocol': 'socks',
+        'settings': <String, dynamic>{
+          'udp': true,
+          'auth': 'noauth',
+        },
+        'sniffing': <String, dynamic>{
+          'enabled': true,
+          'destOverride': <String>['http', 'tls', 'quic'],
+        },
+      },
+      <String, dynamic>{
+        'tag': 'http-in',
+        'listen': '127.0.0.1',
+        'port': runtimeSettings.httpPort,
+        'protocol': 'http',
+        'settings': <String, dynamic>{},
+        'sniffing': <String, dynamic>{
+          'enabled': true,
+          'destOverride': <String>['http', 'tls'],
+        },
+      },
+    ];
+
+    if (runtimeSettings.enableDeviceVpn) {
+      inbounds.add(
+        <String, dynamic>{
+          'tag': 'tun-in',
+          'protocol': 'tun',
+          'settings': <String, dynamic>{
+            'name': 'alphawet0',
+            'mtu': 1500,
+            'stack': 'system',
+            'autoRoute': true,
+            'strictRoute': true,
+            'userLevel': 0,
+          },
+          'sniffing': <String, dynamic>{
+            'enabled': true,
+            'destOverride': <String>['http', 'tls', 'quic'],
+          },
+        },
+      );
+    }
+
+    return inbounds;
   }
 
   void _validateProfile(AwConnectionProfile profile) {
@@ -145,14 +173,14 @@ class AwXrayConfigBuilder {
     final String security = profile.security.toLowerCase();
     if (!_supportedSecurity.contains(security)) {
       throw AwXrayBuilderException(
-        'Unsupported security "$security". Supported: ${_supportedSecurity.join(', ')}.',
+        'Unsupported transport security. Supported: ${_supportedSecurity.join(', ')}.',
       );
     }
 
     final String network = profile.network.toLowerCase();
     if (!_supportedNetworks.contains(network)) {
       throw AwXrayBuilderException(
-        'Unsupported network "$network". Supported: ${_supportedNetworks.join(', ')}.',
+        'Unsupported transport network. Supported: ${_supportedNetworks.join(', ')}.',
       );
     }
 

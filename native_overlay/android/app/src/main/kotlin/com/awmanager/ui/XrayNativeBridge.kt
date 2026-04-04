@@ -19,6 +19,7 @@ object XrayNativeBridge {
         assetDir: String,
         workingDir: String,
         logPath: String,
+        tunFd: Int,
     ): Long
 
     external fun stop(pid: Long): Boolean

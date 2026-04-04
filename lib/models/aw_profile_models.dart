@@ -20,6 +20,26 @@ class AwRealitySettings {
       _hasValue(fingerprint) ||
       _hasValue(spiderX);
 
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'serverName': serverName,
+      'publicKey': publicKey,
+      'shortId': shortId,
+      'fingerprint': fingerprint,
+      'spiderX': spiderX,
+    };
+  }
+
+  factory AwRealitySettings.fromJson(Map<String, dynamic> json) {
+    return AwRealitySettings(
+      serverName: json['serverName'] as String?,
+      publicKey: json['publicKey'] as String?,
+      shortId: json['shortId'] as String?,
+      fingerprint: json['fingerprint'] as String?,
+      spiderX: json['spiderX'] as String?,
+    );
+  }
+
   static bool _hasValue(String? value) => value != null && value.trim().isNotEmpty;
 }
 
@@ -36,6 +56,22 @@ class AwTlsSettings {
 
   bool get hasAnyField =>
       _hasValue(serverName) || _hasValue(fingerprint) || allowInsecure;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'serverName': serverName,
+      'fingerprint': fingerprint,
+      'allowInsecure': allowInsecure,
+    };
+  }
+
+  factory AwTlsSettings.fromJson(Map<String, dynamic> json) {
+    return AwTlsSettings(
+      serverName: json['serverName'] as String?,
+      fingerprint: json['fingerprint'] as String?,
+      allowInsecure: json['allowInsecure'] == true,
+    );
+  }
 
   static bool _hasValue(String? value) => value != null && value.trim().isNotEmpty;
 }
@@ -58,6 +94,30 @@ class AwTransportSettings {
   final String? serviceName;
   final String? authority;
   final String? mode;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'type': type,
+      'headerType': headerType,
+      'path': path,
+      'host': host,
+      'serviceName': serviceName,
+      'authority': authority,
+      'mode': mode,
+    };
+  }
+
+  factory AwTransportSettings.fromJson(Map<String, dynamic> json) {
+    return AwTransportSettings(
+      type: (json['type'] as String?) ?? 'tcp',
+      headerType: json['headerType'] as String?,
+      path: json['path'] as String?,
+      host: json['host'] as String?,
+      serviceName: json['serviceName'] as String?,
+      authority: json['authority'] as String?,
+      mode: json['mode'] as String?,
+    );
+  }
 }
 
 class AwConnectionProfile {
@@ -98,4 +158,60 @@ class AwConnectionProfile {
   String? get serverName => reality?.serverName ?? tls?.serverName;
 
   String get endpoint => port == null ? host : '$host:$port';
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'displayName': displayName,
+      'protocol': protocol,
+      'host': host,
+      'port': port,
+      'userId': userId,
+      'security': security,
+      'network': network,
+      'encryption': encryption,
+      'flow': flow,
+      'fragment': fragment,
+      'queryParameters': queryParameters,
+      'reality': reality?.toJson(),
+      'tls': tls?.toJson(),
+      'transport': transport.toJson(),
+    };
+  }
+
+  factory AwConnectionProfile.fromJson(Map<String, dynamic> json) {
+    final Map<String, dynamic> query = (json['queryParameters'] as Map<dynamic, dynamic>? ?? const <dynamic, dynamic>{})
+        .map((dynamic key, dynamic value) => MapEntry(key.toString(), value.toString()));
+
+    return AwConnectionProfile(
+      displayName: (json['displayName'] as String?) ?? 'Imported config',
+      protocol: (json['protocol'] as String?) ?? 'vless',
+      host: (json['host'] as String?) ?? '-',
+      port: (json['port'] as num?)?.toInt(),
+      userId: json['userId'] as String?,
+      security: (json['security'] as String?) ?? 'none',
+      network: (json['network'] as String?) ?? 'tcp',
+      encryption: (json['encryption'] as String?) ?? 'none',
+      flow: json['flow'] as String?,
+      fragment: json['fragment'] as String?,
+      queryParameters: query,
+      reality: json['reality'] is Map<String, dynamic>
+          ? AwRealitySettings.fromJson(json['reality'] as Map<String, dynamic>)
+          : json['reality'] is Map
+              ? AwRealitySettings.fromJson((json['reality'] as Map<dynamic, dynamic>)
+                  .map((dynamic key, dynamic value) => MapEntry(key.toString(), value)))
+              : null,
+      tls: json['tls'] is Map<String, dynamic>
+          ? AwTlsSettings.fromJson(json['tls'] as Map<String, dynamic>)
+          : json['tls'] is Map
+              ? AwTlsSettings.fromJson((json['tls'] as Map<dynamic, dynamic>)
+                  .map((dynamic key, dynamic value) => MapEntry(key.toString(), value)))
+              : null,
+      transport: json['transport'] is Map<String, dynamic>
+          ? AwTransportSettings.fromJson(json['transport'] as Map<String, dynamic>)
+          : json['transport'] is Map
+              ? AwTransportSettings.fromJson((json['transport'] as Map<dynamic, dynamic>)
+                  .map((dynamic key, dynamic value) => MapEntry(key.toString(), value)))
+              : const AwTransportSettings(),
+    );
+  }
 }

@@ -1,7 +1,7 @@
-import 'package:aw_manager_ui/models/runtime_settings.dart';
-import 'package:aw_manager_ui/services/aw_payload_parser.dart';
-import 'package:aw_manager_ui/services/aw_xray_builder_exception.dart';
-import 'package:aw_manager_ui/services/aw_xray_config_builder.dart';
+import 'package:alpha_wet/models/runtime_settings.dart';
+import 'package:alpha_wet/services/aw_payload_parser.dart';
+import 'package:alpha_wet/services/aw_xray_builder_exception.dart';
+import 'package:alpha_wet/services/aw_xray_config_builder.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

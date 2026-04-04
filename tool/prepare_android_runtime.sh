@@ -7,7 +7,7 @@ OVERLAY_CPP_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/cpp"
 ANDROID_DIR="${ROOT_DIR}/android"
 JNI_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 CPP_TARGET_DIR="${ANDROID_DIR}/app/src/main/cpp"
-INCLUDE_X86_64="${AW_INCLUDE_X86_64:-0}"
+INCLUDE_X86_64="${ALPHAWET_INCLUDE_X86_64:-0}"
 
 if [ ! -d "${ANDROID_DIR}" ]; then
   echo "[ERROR] android/ directory was not found. Run flutter create --platforms=android first."
@@ -59,17 +59,39 @@ if [ -f "${MANIFEST_PATH}" ]; then
 from pathlib import Path
 import re
 import sys
+
 path = Path(sys.argv[1])
 text = path.read_text()
-if 'android.permission.INTERNET' not in text:
-    needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-    replacement = needle + '\n    <uses-permission android:name="android.permission.INTERNET" />'
-    text = text.replace(needle, replacement, 1)
+needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+permissions = [
+    'android.permission.INTERNET',
+    'android.permission.FOREGROUND_SERVICE',
+    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+]
+for permission in permissions:
+    if permission not in text:
+        text = text.replace(needle, needle + f'\n    <uses-permission android:name="{permission}" />', 1)
 if 'android:extractNativeLibs=' not in text:
     text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
+if 'AlphaWetVpnService' not in text:
+    service_block = '''
+        <service
+            android:name=".AlphaWetVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vpn-runtime" />
+        </service>
+'''
+    text = text.replace('</application>', service_block + '    </application>', 1)
 path.write_text(text)
 PY
-  echo "[OK] Patched AndroidManifest.xml permissions/extraction flags"
+  echo "[OK] Patched AndroidManifest.xml permissions/VPN service/extraction flags"
 fi
 
 BUILD_KTS="${ANDROID_DIR}/app/build.gradle.kts"
@@ -130,10 +152,10 @@ rm -rf "${JNI_LIBS_DIR}/x86_64"
 copy_abi arm64-v8a
 if [ "${INCLUDE_X86_64}" = "1" ]; then
   copy_abi x86_64
-  echo "[OK] Included x86_64 runtime because AW_INCLUDE_X86_64=1"
+  echo "[OK] Included x86_64 runtime because ALPHAWET_INCLUDE_X86_64=1"
 else
-  echo "[INFO] Skipping x86_64 runtime to keep APK size down. Set AW_INCLUDE_X86_64=1 if you need emulator support."
+  echo "[INFO] Skipping x86_64 runtime to keep APK size down. Set ALPHAWET_INCLUDE_X86_64=1 if you need emulator support."
 fi
 
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
-echo "[OK] JNI-backed Xray runtime overlay applied"
+echo "[OK] JNI-backed AlphaWet runtime overlay applied"

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 REPO_DIR="${1:-$PWD}"
-BUILD_ROOT="${2:-/tmp/aw_manager_ui}"
-PROJECT_NAME="aw_manager_ui"
-ANDROID_ORG="com.awmanager"
+BUILD_ROOT="${2:-/tmp/alpha_wet}"
+PROJECT_NAME="alpha_wet"
+ANDROID_ORG="com.alphacraft"
 
 rm -rf "${BUILD_ROOT}"
 flutter create \

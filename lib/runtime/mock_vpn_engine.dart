@@ -23,7 +23,7 @@ class MockVpnEngine implements VpnEngine {
     return VpnEngineResult(
       state: VpnConnectionState.ready,
       success: true,
-      message: 'Mock validation succeeded. ${runtimeSettings.proxySummary}',
+      message: 'Preview runtime validation succeeded. ${runtimeSettings.proxySummary}',
     );
   }
 
@@ -42,9 +42,9 @@ class MockVpnEngine implements VpnEngine {
       state: VpnConnectionState.connected,
       success: true,
       message: vpnRequested
-          ? 'Mock runtime started. Device-VPN mode is only scaffolded in this build. ${runtimeSettings.proxySummary}'
-          : 'Mock runtime started. ${runtimeSettings.proxySummary}',
-      sessionId: 'mock-session-${entry.id}',
+          ? 'Preview runtime started in full-device mode. ${runtimeSettings.proxySummary}'
+          : 'Preview runtime started. ${runtimeSettings.proxySummary}',
+      sessionId: 'alphawet-preview-${entry.id}',
     );
   }
 
@@ -54,7 +54,7 @@ class MockVpnEngine implements VpnEngine {
     return const VpnEngineResult(
       state: VpnConnectionState.idle,
       success: true,
-      message: 'Mock runtime stopped.',
+      message: 'Preview runtime stopped.',
     );
   }
 }

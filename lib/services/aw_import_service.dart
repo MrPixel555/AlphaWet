@@ -65,7 +65,7 @@ class AwImportService {
 
     _logger.info(
       _tag,
-      'Import finished. protocol=${payload.profile.protocol}, security=${payload.profile.security}, network=${payload.profile.network}, host=${payload.profile.host}, secure=${payload.isSecureEnvelope}',
+      'Import finished. host=${payload.profile.host}, secure=${payload.isSecureEnvelope}',
     );
 
     return AwImportResult(

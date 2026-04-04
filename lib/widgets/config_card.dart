@@ -11,14 +11,12 @@ class ConfigCard extends StatelessWidget {
     required this.runtimeSettings,
     required this.onToggle,
     required this.onPing,
-    required this.onPreviewXray,
   });
 
   final ConfigEntry entry;
   final RuntimeSettings runtimeSettings;
   final ValueChanged<bool> onToggle;
   final VoidCallback onPing;
-  final VoidCallback onPreviewXray;
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +100,7 @@ class ConfigCard extends StatelessWidget {
                   icon: entry.isEnabled
                       ? Icons.power_settings_new_rounded
                       : Icons.pause_circle_outline_rounded,
-                  label: entry.isEnabled ? 'Enabled' : 'Disabled',
+                  label: entry.isEnabled ? 'Active' : 'Idle',
                 ),
                 _StatusPill(
                   icon: _runtimeIcon(entry.connectionState),
@@ -113,18 +111,6 @@ class ConfigCard extends StatelessWidget {
                   label: entry.importStatus,
                 ),
                 _StatusPill(
-                  icon: Icons.hub_outlined,
-                  label: entry.protocol.toUpperCase(),
-                ),
-                _StatusPill(
-                  icon: Icons.verified_user_outlined,
-                  label: entry.security.toUpperCase(),
-                ),
-                _StatusPill(
-                  icon: Icons.swap_horiz_rounded,
-                  label: entry.network.toUpperCase(),
-                ),
-                _StatusPill(
                   icon: Icons.http_rounded,
                   label: 'HTTP ${runtimeSettings.httpPort}',
                 ),
@@ -132,15 +118,6 @@ class ConfigCard extends StatelessWidget {
                   icon: Icons.route_rounded,
                   label: 'SOCKS ${runtimeSettings.socksPort}',
                 ),
-                _StatusPill(
-                  icon: entry.isXrayReady ? Icons.task_alt_rounded : Icons.error_outline_rounded,
-                  label: entry.xrayBuildStatus,
-                ),
-                if (_hasText(entry.flow))
-                  _StatusPill(
-                    icon: Icons.stream_rounded,
-                    label: entry.flow!,
-                  ),
                 _StatusPill(
                   icon: Icons.speed_rounded,
                   label: entry.pingLabel,
@@ -153,7 +130,6 @@ class ConfigCard extends StatelessWidget {
             ),
             if (_hasText(entry.serverName) ||
                 _hasText(entry.shortId) ||
-                _hasText(entry.xrayPrimaryOutboundTag) ||
                 _hasText(entry.engineSessionId) ||
                 _hasText(entry.engineMessage)) ...<Widget>[
               const SizedBox(height: 16),
@@ -177,26 +153,13 @@ class ConfigCard extends StatelessWidget {
                         label: 'Short ID',
                         value: _maskShortId(entry.shortId!),
                       ),
-                    if (_hasText(entry.xrayPrimaryOutboundTag))
-                      _DetailLine(
-                        label: 'Outbound Tag',
-                        value: entry.xrayPrimaryOutboundTag!,
-                      ),
-                    _DetailLine(
-                      label: 'Payload',
-                      value: entry.payloadKind.toUpperCase(),
-                    ),
                     _DetailLine(
                       label: 'Proxy',
                       value: runtimeSettings.proxySummary,
                     ),
                     _DetailLine(
                       label: 'Mode',
-                      value: runtimeSettings.enableDeviceVpn ? 'DEVICE VPN (experimental)' : 'LOCAL PROXY',
-                    ),
-                    _DetailLine(
-                      label: 'Xray',
-                      value: entry.isXrayReady ? 'READY' : 'FAILED',
+                      value: runtimeSettings.enableDeviceVpn ? 'FULL DEVICE VPN' : 'LOCAL PROXY',
                     ),
                     if (_hasText(entry.engineSessionId))
                       _DetailLine(
@@ -245,17 +208,12 @@ class ConfigCard extends StatelessWidget {
                       : const Icon(Icons.network_ping_rounded),
                   label: Text(entry.isPinging ? 'Pinging...' : 'Ping'),
                 ),
-                FilledButton.icon(
-                  onPressed: onPreviewXray,
-                  icon: const Icon(Icons.data_object_rounded),
-                  label: Text(entry.isXrayReady ? 'Preview Xray JSON' : 'Preview Build Error'),
-                ),
                 Text(
                   _runtimeSummary(entry),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: colors.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -267,25 +225,25 @@ class ConfigCard extends StatelessWidget {
 
   String _runtimeSummary(ConfigEntry entry) {
     if (!entry.isXrayReady) {
-      return 'Xray build failed • runtime blocked';
+      return 'Runtime blocked';
     }
     switch (entry.connectionState) {
       case VpnConnectionState.connected:
         return runtimeSettings.enableDeviceVpn
-            ? 'Xray core active • device-VPN mode requested'
-            : 'Xray core active • local proxy ports exposed';
+            ? 'Full-device tunnel active'
+            : 'Local proxy active';
       case VpnConnectionState.connecting:
-        return 'Starting Xray core...';
+        return 'Starting runtime...';
       case VpnConnectionState.validating:
-        return 'Validating config with Xray core...';
+        return 'Validating config...';
       case VpnConnectionState.failed:
-        return 'Runtime failed • inspect message below';
+        return 'Runtime failed';
       case VpnConnectionState.ready:
         return entry.isSecureEnvelope
-            ? 'Verified secure import • ready for runtime'
-            : 'Legacy import • ready for runtime';
+            ? 'Ready • verified import'
+            : 'Ready • imported';
       case VpnConnectionState.disconnecting:
-        return 'Stopping Xray core...';
+        return 'Stopping runtime...';
       case VpnConnectionState.idle:
         return 'Runtime idle';
     }
@@ -375,14 +333,14 @@ class _StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.58),
+        color: colors.surfaceContainerHighest.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: colors.outlineVariant),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Icon(icon, size: 18, color: colors.onSurfaceVariant),
+          Icon(icon, size: 16, color: colors.onSurfaceVariant),
           const SizedBox(width: 8),
           Text(
             label,

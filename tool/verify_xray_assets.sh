@@ -19,7 +19,7 @@ check_file "${ROOT_DIR}/assets/xray/common/geoip.dat"
 check_file "${ROOT_DIR}/assets/xray/common/geosite.dat"
 
 if [ -f "${ROOT_DIR}/assets/xray/android/x86_64/xray" ]; then
-  echo "[INFO] Optional x86_64 runtime is present. It will be ignored unless AW_INCLUDE_X86_64=1 is set."
+  echo "[INFO] Optional x86_64 runtime is present. It will be ignored unless ALPHAWET_INCLUDE_X86_64=1 is set."
 fi
 
 if grep -q 'assets/xray/android/arm64-v8a/' "${ROOT_DIR}/pubspec.yaml" || grep -q 'assets/xray/android/x86_64/' "${ROOT_DIR}/pubspec.yaml"; then

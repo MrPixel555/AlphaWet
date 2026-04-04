@@ -1,8 +1,8 @@
-import 'package:aw_manager_ui/models/aw_profile_models.dart';
-import 'package:aw_manager_ui/models/config_entry.dart';
-import 'package:aw_manager_ui/models/runtime_settings.dart';
-import 'package:aw_manager_ui/models/vpn_runtime_models.dart';
-import 'package:aw_manager_ui/runtime/mock_vpn_engine.dart';
+import 'package:alpha_wet/models/aw_profile_models.dart';
+import 'package:alpha_wet/models/config_entry.dart';
+import 'package:alpha_wet/models/runtime_settings.dart';
+import 'package:alpha_wet/models/vpn_runtime_models.dart';
+import 'package:alpha_wet/runtime/mock_vpn_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

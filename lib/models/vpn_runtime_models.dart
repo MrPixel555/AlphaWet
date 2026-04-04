@@ -12,7 +12,7 @@ extension VpnConnectionStateX on VpnConnectionState {
   String get label {
     switch (this) {
       case VpnConnectionState.idle:
-        return 'Idle';
+        return 'Disconnected';
       case VpnConnectionState.validating:
         return 'Validating';
       case VpnConnectionState.ready:

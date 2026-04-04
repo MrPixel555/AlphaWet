@@ -179,7 +179,7 @@ class AwConnectionProfile {
   }
 
   factory AwConnectionProfile.fromJson(Map<String, dynamic> json) {
-    final Map<String, dynamic> query = (json['queryParameters'] as Map<dynamic, dynamic>? ?? const <dynamic, dynamic>{})
+    final Map<String, String> query = (json['queryParameters'] as Map<dynamic, dynamic>? ?? const <dynamic, dynamic>{})
         .map((dynamic key, dynamic value) => MapEntry(key.toString(), value.toString()));
 
     return AwConnectionProfile(

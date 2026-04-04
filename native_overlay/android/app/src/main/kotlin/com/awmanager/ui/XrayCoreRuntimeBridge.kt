@@ -132,7 +132,10 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             activeConfigId == configId &&
             activeHttpPort != null
         ) {
-            return XrayCoreRuntimeManager.pingProxy(httpPort = activeHttpPort, url = url)
+            val activePing = XrayCoreRuntimeManager.pingProxy(httpPort = activeHttpPort, url = url)
+            if (activePing["success"] == true) {
+                return activePing
+            }
         }
 
         val packagedBinary = RuntimeBundleFactory.resolvePackagedBinaryOrNull(context)
@@ -358,6 +361,7 @@ object XrayCoreRuntimeManager {
     private val lock = Any()
     private var sessionId: String? = null
     private var activeConfigId: String? = null
+    private var activeDisplayName: String? = null
     private var activePid: Long? = null
     private var lastState: String = "idle"
     private var lastMessage: String = "Idle."
@@ -486,6 +490,7 @@ object XrayCoreRuntimeManager {
 
         sessionId = UUID.randomUUID().toString()
         activeConfigId = bundle.configId
+        activeDisplayName = bundle.displayName
         activePid = pid
         currentHttpPort = bundle.httpPort
         currentSocksPort = bundle.socksPort
@@ -556,6 +561,7 @@ object XrayCoreRuntimeManager {
             "success" to (running || lastState != "error"),
             "message" to if (running) lastMessage else lastMessage,
             "configId" to activeConfigId,
+            "displayName" to activeDisplayName,
             "sessionId" to sessionId,
             "httpPort" to currentHttpPort,
             "socksPort" to currentSocksPort,
@@ -702,6 +708,7 @@ object XrayCoreRuntimeManager {
         activePid = null
         sessionId = null
         activeConfigId = null
+        activeDisplayName = null
         currentHttpPort = 10808
         currentSocksPort = 10809
         currentDeviceVpnMode = false

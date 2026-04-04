@@ -29,49 +29,47 @@ class AwXrayConfigBuilder {
       outboundTag: outboundTag,
     );
 
-    final List<Object> inbounds = runtimeSettings.enableDeviceVpn
-        ? <Object>[
-            <String, dynamic>{
-              'tag': 'tun-in',
-              'port': 0,
-              'protocol': 'tun',
-              'settings': <String, dynamic>{
-                'name': 'alphawet',
-                'MTU': 1500,
-              },
-              'sniffing': <String, dynamic>{
-                'enabled': true,
-                'destOverride': <String>['http', 'tls', 'quic'],
-              },
-            },
-          ]
-        : <Object>[
-            <String, dynamic>{
-              'tag': 'socks-in',
-              'listen': '127.0.0.1',
-              'port': runtimeSettings.socksPort,
-              'protocol': 'socks',
-              'settings': <String, dynamic>{
-                'udp': true,
-                'auth': 'noauth',
-              },
-              'sniffing': <String, dynamic>{
-                'enabled': true,
-                'destOverride': <String>['http', 'tls', 'quic'],
-              },
-            },
-            <String, dynamic>{
-              'tag': 'http-in',
-              'listen': '127.0.0.1',
-              'port': runtimeSettings.httpPort,
-              'protocol': 'http',
-              'settings': <String, dynamic>{},
-              'sniffing': <String, dynamic>{
-                'enabled': true,
-                'destOverride': <String>['http', 'tls'],
-              },
-            },
-          ];
+    final List<Object> inbounds = <Object>[
+      if (runtimeSettings.enableDeviceVpn)
+        <String, dynamic>{
+          'tag': 'tun-in',
+          'port': 0,
+          'protocol': 'tun',
+          'settings': <String, dynamic>{
+            'name': 'alphawet',
+            'MTU': 1500,
+          },
+          'sniffing': <String, dynamic>{
+            'enabled': true,
+            'destOverride': <String>['http', 'tls', 'quic'],
+          },
+        },
+      <String, dynamic>{
+        'tag': 'socks-in',
+        'listen': '127.0.0.1',
+        'port': runtimeSettings.socksPort,
+        'protocol': 'socks',
+        'settings': <String, dynamic>{
+          'udp': true,
+          'auth': 'noauth',
+        },
+        'sniffing': <String, dynamic>{
+          'enabled': true,
+          'destOverride': <String>['http', 'tls', 'quic'],
+        },
+      },
+      <String, dynamic>{
+        'tag': 'http-in',
+        'listen': '127.0.0.1',
+        'port': runtimeSettings.httpPort,
+        'protocol': 'http',
+        'settings': <String, dynamic>{},
+        'sniffing': <String, dynamic>{
+          'enabled': true,
+          'destOverride': <String>['http', 'tls'],
+        },
+      },
+    ];
 
     final List<Object> routingRules = <Object>[
       <String, dynamic>{

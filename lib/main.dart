@@ -59,7 +59,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<ConfigEntry> _configs = <ConfigEntry>[];
   final AppLogger _logger = AppLogger.instance;
   late final AwImportService _awImportService;
@@ -73,11 +73,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isImporting = false;
   bool _isExportingLogs = false;
   bool _isLoadingRuntimeSettings = true;
+  bool _configsLoaded = false;
+  bool _isRestoringRuntimeState = false;
   RuntimeSettings _runtimeSettings = RuntimeSettings.defaults;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _awImportService = AwImportService(logger: _logger);
     _xrayConfigBuilder = AwXrayConfigBuilder(logger: _logger);
     _logExportService = AppLogExportService(logger: _logger);
@@ -91,8 +94,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _runtimeWatchdog?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_restoreRuntimeStateFromNative());
+    }
   }
 
   Future<void> _loadRuntimeSettings() async {
@@ -112,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_configs.isNotEmpty) {
         _rebuildAllConfigsForRuntimeSettings();
       }
+      await _restoreRuntimeStateFromNative();
     } catch (error, stackTrace) {
       _logger.error('HomeScreen', 'Failed to load runtime settings.', error: error, stackTrace: stackTrace);
       if (!mounted) {
@@ -121,6 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _runtimeSettings = RuntimeSettings.defaults;
         _isLoadingRuntimeSettings = false;
       });
+      await _restoreRuntimeStateFromNative();
     }
   }
 
@@ -311,7 +324,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadPersistedConfigs() async {
     try {
       final List<PersistedConfigRecord> stored = await _configStore.load();
-      if (!mounted || stored.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      if (stored.isEmpty) {
+        setState(() {
+          _configsLoaded = true;
+        });
         return;
       }
       final List<ConfigEntry> rebuilt = stored
@@ -332,9 +351,93 @@ class _HomeScreenState extends State<HomeScreen> {
         _configs
           ..clear()
           ..addAll(rebuilt);
+        _configsLoaded = true;
       });
+      await _restoreRuntimeStateFromNative();
     } catch (error, stackTrace) {
       _logger.error('HomeScreen', 'Failed to restore saved configs.', error: error, stackTrace: stackTrace);
+    }
+  }
+
+  Future<void> _restoreRuntimeStateFromNative() async {
+    if (!mounted || _isRestoringRuntimeState || !_configsLoaded) {
+      return;
+    }
+    _isRestoringRuntimeState = true;
+    try {
+      final Map<Object?, Object?>? status = await RuntimeBridge.getCoreStatus();
+      final String state = (status?['state'] as String? ?? 'idle').trim().toLowerCase();
+      final bool running = state == 'running' && status?['success'] == true;
+      final String? activeConfigId = (status?['configId'] as String?)?.trim();
+      final String? sessionId = (status?['sessionId'] as String?)?.trim();
+      final String message = (status?['message'] as String? ?? '').trim();
+      final bool deviceVpnMode = status?['deviceVpnMode'] == true;
+
+      if (!mounted) {
+        return;
+      }
+
+      bool configsChanged = false;
+      final List<ConfigEntry> updated = <ConfigEntry>[];
+      for (final ConfigEntry item in _configs) {
+        final bool isActive = running && activeConfigId != null && item.id == activeConfigId;
+        final ConfigEntry next = item.copyWith(
+          isEnabled: isActive,
+          connectionState: isActive
+              ? VpnConnectionState.connected
+              : (item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed),
+          engineSessionId: isActive ? sessionId : null,
+          engineMessage: isActive
+              ? (message.isNotEmpty
+                  ? message
+                  : (deviceVpnMode
+                      ? 'AlphaWet VPN session is already active.'
+                      : 'AlphaWet proxy session is already active.'))
+              : (item.isXrayReady
+                  ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
+                  : (item.xrayBuildError ?? 'Xray build failed.')),
+          lastConnectedAt: isActive ? (item.lastConnectedAt ?? DateTime.now()) : item.lastConnectedAt,
+        );
+        if (next.isEnabled != item.isEnabled ||
+            next.connectionState != item.connectionState ||
+            next.engineSessionId != item.engineSessionId ||
+            next.engineMessage != item.engineMessage ||
+            next.lastConnectedAt != item.lastConnectedAt) {
+          configsChanged = true;
+        }
+        updated.add(next);
+      }
+
+      final bool settingsChanged = running && _runtimeSettings.enableDeviceVpn != deviceVpnMode;
+      final RuntimeSettings resolvedSettings = settingsChanged
+          ? _runtimeSettings.copyWith(mode: deviceVpnMode ? RuntimeMode.vpn : RuntimeMode.proxy)
+          : _runtimeSettings;
+
+      if (!configsChanged && !settingsChanged) {
+        return;
+      }
+
+      setState(() {
+        _configs
+          ..clear()
+          ..addAll(updated);
+        _runtimeSettings = resolvedSettings;
+      });
+      if (configsChanged) {
+        await _persistConfigs();
+      }
+      if (settingsChanged) {
+        await _runtimeSettingsStore.save(resolvedSettings);
+      }
+    } catch (error, stackTrace) {
+      _logger.warning(
+        'HomeScreen',
+        'Failed to synchronize runtime state from native bridge.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      _isRestoringRuntimeState = false;
     }
   }
 
@@ -366,7 +469,11 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       }
     }
-    if (active == null || active.isBusy) {
+    if (active == null) {
+      await _restoreRuntimeStateFromNative();
+      return;
+    }
+    if (active.isBusy) {
       return;
     }
     final Map<Object?, Object?>? status = await RuntimeBridge.getCoreStatus();
@@ -1071,8 +1178,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 child: Text(
                                   _runtimeSettings.enableDeviceVpn
-                                      ? 'VPN mode is active. AlphaWet requests an Android VPN session and avoids starting the user-facing proxy listeners.'
-                                      : 'Proxy mode is active. AlphaWet only starts the local HTTP and SOCKS listeners on the ports shown above.',
+                                      ? 'VPN mode is active. AlphaWet requests an Android VPN session and also keeps the local HTTP and SOCKS listeners available for diagnostics such as Google real-delay ping.'
+                                      : 'Proxy mode is active. AlphaWet keeps the local HTTP and SOCKS listeners on the ports shown above.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: colors.onSecondaryContainer,
                                   ),
@@ -1375,7 +1482,7 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                 Text(
                   proxyMode
                       ? 'Proxy mode starts the local listeners and uses the ports below.'
-                      : 'VPN mode keeps the app in VPN behavior and does not start the user-facing proxy listeners.',
+                      : 'VPN mode starts the Android VPN tunnel and still keeps the local listeners available for diagnostics and status checks.',
                   style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ],

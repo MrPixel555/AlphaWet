@@ -1,4 +1,4 @@
-name: aw_manager_ui
+name: alpha_wet
 description: Flutter UI for importing .aw configs, building Xray JSON, and launching Android Xray-core.
 publish_to: 'none'
 version: 2.3.8+238

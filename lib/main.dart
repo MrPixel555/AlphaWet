@@ -260,6 +260,10 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       await _persistConfigs();
 
+      if (!mounted) {
+        return;
+      }
+
       final String message = entry.isXrayReady
           ? '${file.name} imported. ${_runtimeSettings.proxySummary} is now embedded into the generated Xray config.'
           : '${file.name} imported, but Xray JSON build failed.';

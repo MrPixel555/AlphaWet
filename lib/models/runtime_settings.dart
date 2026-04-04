@@ -1,28 +1,40 @@
+enum RuntimeMode { vpn, proxy }
+
 class RuntimeSettings {
   const RuntimeSettings({
     this.httpPort = 10808,
     this.socksPort = 10809,
-    this.enableDeviceVpn = true,
+    RuntimeMode? mode,
+    bool? enableDeviceVpn,
     this.vpnPermissionGranted = false,
-  });
+  }) : mode = mode ?? ((enableDeviceVpn ?? false) ? RuntimeMode.vpn : RuntimeMode.proxy);
 
   final int httpPort;
   final int socksPort;
-  final bool enableDeviceVpn;
+  final RuntimeMode mode;
   final bool vpnPermissionGranted;
 
-  static const RuntimeSettings defaults = RuntimeSettings();
+  static const RuntimeSettings defaults = RuntimeSettings(mode: RuntimeMode.vpn);
+
+  bool get enableDeviceVpn => mode == RuntimeMode.vpn;
+  bool get isProxyMode => mode == RuntimeMode.proxy;
 
   RuntimeSettings copyWith({
     int? httpPort,
     int? socksPort,
+    RuntimeMode? mode,
     bool? enableDeviceVpn,
     bool? vpnPermissionGranted,
   }) {
+    final RuntimeMode resolvedMode = mode ??
+        (enableDeviceVpn != null
+            ? (enableDeviceVpn ? RuntimeMode.vpn : RuntimeMode.proxy)
+            : this.mode);
+
     return RuntimeSettings(
       httpPort: httpPort ?? this.httpPort,
       socksPort: socksPort ?? this.socksPort,
-      enableDeviceVpn: enableDeviceVpn ?? this.enableDeviceVpn,
+      mode: resolvedMode,
       vpnPermissionGranted: vpnPermissionGranted ?? this.vpnPermissionGranted,
     );
   }
@@ -31,7 +43,7 @@ class RuntimeSettings {
 
   String get proxySummary => 'HTTP 127.0.0.1:$httpPort • SOCKS 127.0.0.1:$socksPort';
 
-  String get modeLabel => enableDeviceVpn ? 'Whole device' : 'Local proxy';
+  String get modeLabel => enableDeviceVpn ? 'VPN' : 'Proxy';
 
   String? validate() {
     if (!_isValidPort(httpPort)) {

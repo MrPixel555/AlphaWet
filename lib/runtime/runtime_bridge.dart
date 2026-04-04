@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -48,6 +49,32 @@ class RuntimeBridge {
     }
   }
 
+  static Future<List<int>> findOccupiedLocalPorts(Iterable<int> ports) async {
+    final List<int> occupied = <int>[];
+    final List<int> uniquePorts = ports.toSet().toList(growable: false)..sort();
+
+    for (final int port in uniquePorts) {
+      if (port <= 0 || port > 65535) {
+        occupied.add(port);
+        continue;
+      }
+      ServerSocket? server;
+      try {
+        server = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          port,
+          shared: false,
+        );
+      } catch (_) {
+        occupied.add(port);
+      } finally {
+        await server?.close();
+      }
+    }
+
+    return occupied;
+  }
+
   static Future<Map<Object?, Object?>?> pingProxy({
     required int httpPort,
     int socksPort = 10809,
@@ -55,42 +82,12 @@ class RuntimeBridge {
     String? configId,
     String? displayName,
     String? configJson,
-    String? targetHost,
-    int? targetPort,
   }) async {
-    final bool proxyAvailable = await _isLocalTcpPortOpen(httpPort);
-
-    if (proxyAvailable) {
-      try {
-        return await _probeThroughHttpProxy(httpPort: httpPort, url: url);
-      } catch (error) {
-        if (targetHost != null && targetPort != null) {
-          final Map<Object?, Object?> direct = await _probeDirectTcp(
-            host: targetHost,
-            port: targetPort,
-          );
-          return <Object?, Object?>{
-            ...direct,
-            'message': '${direct['message']} Proxy probe via 127.0.0.1:$httpPort failed first: $error',
-          };
-        }
-        return <Object?, Object?>{
-          'success': false,
-          'message': 'Proxy probe via 127.0.0.1:$httpPort failed: $error',
-        };
-      }
-    }
-
-    if (targetHost != null && targetPort != null) {
-      final Map<Object?, Object?> direct = await _probeDirectTcp(
-        host: targetHost,
-        port: targetPort,
-      );
-      return <Object?, Object?>{
-        ...direct,
-        'message': '${direct['message']} (Direct server probe used because the local Xray proxy is not active yet.)',
-      };
-    }
+    final String? normalizedConfigJson = _buildGooglePingConfigJson(
+      configJson: configJson,
+      httpPort: httpPort,
+      socksPort: socksPort,
+    );
 
     try {
       return await _channel.invokeMapMethod<Object?, Object?>(
@@ -101,94 +98,72 @@ class RuntimeBridge {
           'url': url,
           'configId': configId,
           'displayName': displayName,
-          'configJson': configJson,
-          'targetHost': targetHost,
-          'targetPort': targetPort,
+          'configJson': normalizedConfigJson,
         },
       );
     } on MissingPluginException {
       return <Object?, Object?>{
         'success': false,
-        'message': 'Ping is unavailable because no local proxy is active and the Android runtime bridge is missing.',
+        'message': 'Ping is unavailable because the Android runtime bridge is missing.',
       };
     } on PlatformException catch (error) {
       return <Object?, Object?>{
         'success': false,
-        'message': error.message ?? 'Ping is unavailable because no local proxy is active.',
+        'message': error.message ?? 'Ping is unavailable right now.',
       };
     }
   }
 
-  static Future<bool> _isLocalTcpPortOpen(int port) async {
-    try {
-      final Socket socket = await Socket.connect(
-        InternetAddress.loopbackIPv4,
-        port,
-        timeout: const Duration(milliseconds: 600),
-      );
-      socket.destroy();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<Map<Object?, Object?>> _probeThroughHttpProxy({
+  static String? _buildGooglePingConfigJson({
+    required String? configJson,
     required int httpPort,
-    required String url,
-  }) async {
-    final Stopwatch stopwatch = Stopwatch()..start();
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 8)
-      ..findProxy = (_) => 'PROXY 127.0.0.1:$httpPort';
-
-    try {
-      final Uri uri = Uri.parse(url);
-      final HttpClientRequest request = await client.getUrl(uri);
-      request.followRedirects = false;
-      request.headers.set(HttpHeaders.userAgentHeader, 'AlphaWet/2.3.8');
-      final HttpClientResponse response = await request.close();
-      await response.drain<void>();
-      stopwatch.stop();
-      final int elapsedMs = stopwatch.elapsedMilliseconds <= 0 ? 1 : stopwatch.elapsedMilliseconds;
-      final int code = response.statusCode;
-      final bool success = (code >= 200 && code < 400) || code == 204;
-      return <Object?, Object?>{
-        'success': success,
-        'latencyMs': elapsedMs,
-        'message': success
-            ? 'Proxy path to google.com is reachable in $elapsedMs ms (HTTP $code).'
-            : 'Proxy reached the remote endpoint, but google.com returned HTTP $code.',
-      };
-    } finally {
-      client.close(force: true);
+    required int socksPort,
+  }) {
+    if (configJson == null || configJson.trim().isEmpty) {
+      return null;
     }
-  }
-
-  static Future<Map<Object?, Object?>> _probeDirectTcp({
-    required String host,
-    required int port,
-  }) async {
-    final Stopwatch stopwatch = Stopwatch()..start();
     try {
-      final Socket socket = await Socket.connect(
-        host,
-        port,
-        timeout: const Duration(seconds: 5),
-      );
-      socket.destroy();
-      stopwatch.stop();
-      final int elapsedMs = stopwatch.elapsedMilliseconds <= 0 ? 1 : stopwatch.elapsedMilliseconds;
-      return <Object?, Object?>{
-        'success': true,
-        'latencyMs': elapsedMs,
-        'message': 'TCP reachability to $host:$port succeeded in $elapsedMs ms.',
+      final Object? decoded = jsonDecode(configJson);
+      if (decoded is! Map<String, dynamic>) {
+        return configJson;
+      }
+      final Map<String, dynamic> root = Map<String, dynamic>.from(decoded);
+      root['awManagerRuntime'] = <String, dynamic>{
+        'httpPort': httpPort,
+        'socksPort': socksPort,
+        'deviceVpnRequested': false,
+        'pingOnly': true,
       };
-    } catch (error) {
-      return <Object?, Object?>{
-        'success': false,
-        'message': 'TCP reachability to $host:$port failed: $error',
-      };
+      root['inbounds'] = <Object>[
+        <String, dynamic>{
+          'tag': 'socks-in',
+          'listen': '127.0.0.1',
+          'port': socksPort,
+          'protocol': 'socks',
+          'settings': <String, dynamic>{
+            'udp': true,
+            'auth': 'noauth',
+          },
+          'sniffing': <String, dynamic>{
+            'enabled': true,
+            'destOverride': <String>['http', 'tls', 'quic'],
+          },
+        },
+        <String, dynamic>{
+          'tag': 'http-in',
+          'listen': '127.0.0.1',
+          'port': httpPort,
+          'protocol': 'http',
+          'settings': <String, dynamic>{},
+          'sniffing': <String, dynamic>{
+            'enabled': true,
+            'destOverride': <String>['http', 'tls'],
+          },
+        },
+      ];
+      return const JsonEncoder.withIndent('  ').convert(root);
+    } catch (_) {
+      return configJson;
     }
   }
 }

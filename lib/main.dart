@@ -508,16 +508,19 @@ class _HomeScreenState extends State<HomeScreen> {
     RuntimeSettings nextSettings = updated;
     if (nextSettings.enableDeviceVpn) {
       final bool granted = await RuntimeBridge.ensureVpnPermission();
-      nextSettings = nextSettings.copyWith(vpnPermissionGranted: granted, enableDeviceVpn: granted);
+      nextSettings = nextSettings.copyWith(
+        mode: granted ? RuntimeMode.vpn : RuntimeMode.proxy,
+        vpnPermissionGranted: granted,
+      );
       if (!granted && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Android VPN permission was not granted. Whole-device tunnel stayed off.'),
+            content: Text('Android VPN permission was not granted. AlphaWet stayed in Proxy mode.'),
           ),
         );
       }
     } else {
-      nextSettings = nextSettings.copyWith(vpnPermissionGranted: false);
+      nextSettings = nextSettings.copyWith(vpnPermissionGranted: false, mode: RuntimeMode.proxy);
     }
 
     await _runtimeSettingsStore.save(nextSettings);
@@ -537,10 +540,19 @@ class _HomeScreenState extends State<HomeScreen> {
       SnackBar(
         content: Text(
           nextSettings.enableDeviceVpn
-              ? 'Runtime settings saved. Whole-device tunnel is enabled by default.'
-              : 'Runtime settings saved. ${nextSettings.proxySummary}',
+              ? 'Settings saved. Mode is VPN.'
+              : 'Settings saved. ${nextSettings.proxySummary}',
         ),
       ),
+    );
+  }
+
+  Future<List<int>> _findBusyProxyPorts(RuntimeSettings settings) async {
+    if (settings.enableDeviceVpn) {
+      return <int>[];
+    }
+    return RuntimeBridge.findOccupiedLocalPorts(
+      <int>[settings.httpPort, settings.socksPort],
     );
   }
 
@@ -580,12 +592,12 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (!granted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Android VPN permission is required for whole-device tunneling.')),
+          const SnackBar(content: Text('Android VPN permission is required for VPN mode.')),
         );
         return;
       }
       final RuntimeSettings updatedSettings = _runtimeSettings.copyWith(
-        enableDeviceVpn: true,
+        mode: RuntimeMode.vpn,
         vpnPermissionGranted: true,
       );
       await _runtimeSettingsStore.save(updatedSettings);
@@ -599,6 +611,31 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await _disconnectOtherConfigs(id);
+
+    final List<int> busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+    if (busyPorts.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'AlphaWet could not start because these local ports are busy: ${busyPorts.join(', ')}',
+            ),
+          ),
+        );
+      }
+      final ConfigEntry latest = _findEntryById(id) ?? current;
+      _setEntry(
+        id,
+        latest.copyWith(
+          isEnabled: false,
+          connectionState: VpnConnectionState.failed,
+          engineMessage: 'Busy local ports: ${busyPorts.join(', ')}',
+          engineSessionId: null,
+        ),
+      );
+      return;
+    }
+
     final ConfigEntry? refreshedCurrent = _findEntryById(id);
     if (refreshedCurrent == null) {
       return;
@@ -608,7 +645,9 @@ class _HomeScreenState extends State<HomeScreen> {
       id,
       refreshedCurrent.copyWith(
         connectionState: VpnConnectionState.validating,
-        engineMessage: 'Validating generated Xray config...',
+        engineMessage: _runtimeSettings.enableDeviceVpn
+            ? 'Validating generated Xray config for VPN mode...'
+            : 'Validating generated Xray config for Proxy mode...',
       ),
     );
     final ConfigEntry validateTarget = _findEntryById(id) ?? current;
@@ -633,7 +672,9 @@ class _HomeScreenState extends State<HomeScreen> {
       readyToConnect.copyWith(
         isEnabled: true,
         connectionState: VpnConnectionState.connecting,
-        engineMessage: 'Starting Xray core...',
+        engineMessage: _runtimeSettings.enableDeviceVpn
+            ? 'Starting AlphaWet in VPN mode...'
+            : 'Starting AlphaWet in Proxy mode...',
         lastValidatedAt: DateTime.now(),
       ),
     );
@@ -695,8 +736,6 @@ class _HomeScreenState extends State<HomeScreen> {
         configId: current.id,
         displayName: current.name,
         configJson: current.xrayConfigJson,
-        targetHost: current.host,
-        targetPort: current.port,
       );
       if (!mounted) {
         return;
@@ -982,6 +1021,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       Text(
                                         _isLoadingRuntimeSettings
                                             ? 'Loading runtime settings...'
+                                            : _runtimeSettings.enableDeviceVpn
+                                            ? 'Current mode: VPN'
                                             : 'Current listener profile: ${_runtimeSettings.proxySummary}',
                                         style: theme.textTheme.bodyMedium?.copyWith(
                                           color: colors.onSurfaceVariant,
@@ -1015,7 +1056,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _MetricChip(
                                   icon: Icons.vpn_lock_outlined,
                                   label: 'Tunnel',
-                                  value: _runtimeSettings.enableDeviceVpn ? 'Whole device' : 'App only',
+                                  value: _runtimeSettings.modeLabel,
                                 ),
                               ],
                             ),
@@ -1029,7 +1070,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                                 child: Text(
-                                  'AlphaWet will try to tunnel the whole device through the local runtime. The app process itself is excluded from the VPN interface to avoid self-loop routing.',
+                                  _runtimeSettings.enableDeviceVpn
+                                      ? 'VPN mode is active. AlphaWet requests an Android VPN session and avoids starting the user-facing proxy listeners.'
+                                      : 'Proxy mode is active. AlphaWet only starts the local HTTP and SOCKS listeners on the ports shown above.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: colors.onSecondaryContainer,
                                   ),
@@ -1079,7 +1122,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Imported configs stay saved on this device. AlphaWet rebuilds each one with the current ports and can route the whole device when that mode is enabled.',
+                      'Imported configs stay saved on this device. AlphaWet rebuilds each one with the current Mode and port profile before starting it.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),
@@ -1210,7 +1253,7 @@ class _RuntimeSettingsSheet extends StatefulWidget {
 class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
   late final TextEditingController _httpController;
   late final TextEditingController _socksController;
-  late bool _enableDeviceVpn;
+  late RuntimeMode _mode;
   String? _errorText;
 
   @override
@@ -1218,7 +1261,7 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
     super.initState();
     _httpController = TextEditingController(text: '${widget.initialSettings.httpPort}');
     _socksController = TextEditingController(text: '${widget.initialSettings.socksPort}');
-    _enableDeviceVpn = widget.initialSettings.enableDeviceVpn;
+    _mode = widget.initialSettings.mode;
   }
 
   @override
@@ -1241,7 +1284,10 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
     final RuntimeSettings next = widget.initialSettings.copyWith(
       httpPort: httpPort,
       socksPort: socksPort,
-      enableDeviceVpn: _enableDeviceVpn,
+      mode: _mode,
+      vpnPermissionGranted: _mode == RuntimeMode.vpn
+          ? widget.initialSettings.vpnPermissionGranted
+          : false,
     );
     final String? validationError = next.validate();
     if (validationError != null) {
@@ -1259,6 +1305,7 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
     final EdgeInsets viewInsets = MediaQuery.of(context).viewInsets;
+    final bool proxyMode = _mode == RuntimeMode.proxy;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + viewInsets.bottom),
@@ -1278,47 +1325,94 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
           ),
           const SizedBox(height: 18),
           Text(
-            'Runtime settings',
+            'Settings',
             style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 6),
           Text(
-            'AlphaWet keeps these ports across launches. Whole-device tunneling is on by default.',
+            'Choose exactly one mode. VPN is the default. Proxy mode unlocks the local HTTP and SOCKS ports below.',
             style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _httpController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'HTTP proxy port',
-              hintText: '10808',
-              border: OutlineInputBorder(),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: colors.outlineVariant),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Mode',
+                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                SegmentedButton<RuntimeMode>(
+                  segments: const <ButtonSegment<RuntimeMode>>[
+                    ButtonSegment<RuntimeMode>(
+                      value: RuntimeMode.vpn,
+                      label: Text('VPN'),
+                      icon: Icon(Icons.vpn_lock_rounded),
+                    ),
+                    ButtonSegment<RuntimeMode>(
+                      value: RuntimeMode.proxy,
+                      label: Text('Proxy'),
+                      icon: Icon(Icons.lan_rounded),
+                    ),
+                  ],
+                  selected: <RuntimeMode>{_mode},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (Set<RuntimeMode> selection) {
+                    setState(() {
+                      _mode = selection.first;
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  proxyMode
+                      ? 'Proxy mode starts the local listeners and uses the ports below.'
+                      : 'VPN mode keeps the app in VPN behavior and does not start the user-facing proxy listeners.',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _socksController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'SOCKS proxy port',
-              hintText: '10809',
-              border: OutlineInputBorder(),
+          const SizedBox(height: 16),
+          IgnorePointer(
+            ignoring: !proxyMode,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: proxyMode ? 1 : 0.45,
+              child: Column(
+                children: <Widget>[
+                  TextField(
+                    controller: _httpController,
+                    enabled: proxyMode,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'HTTP proxy port',
+                      hintText: '10808',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _socksController,
+                    enabled: proxyMode,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'SOCKS proxy port',
+                      hintText: '10809',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Tunnel the whole device'),
-            subtitle: const Text(
-              'When enabled, AlphaWet asks Android for VPN permission and routes device traffic through the local runtime.',
-            ),
-            value: _enableDeviceVpn,
-            onChanged: (bool value) {
-              setState(() {
-                _enableDeviceVpn = value;
-              });
-            },
           ),
           if (_errorText != null) ...<Widget>[
             const SizedBox(height: 10),

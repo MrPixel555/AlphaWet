@@ -28,7 +28,9 @@ class MainActivity : FlutterActivity() {
                     val payload = bridge.startCore(call)
                     if (call.argument<Boolean>("enableDeviceVpn") == true && payload["success"] == true) {
                         runOnUiThread {
-                            moveTaskToBack(true)
+                            if (!isFinishing && !isDestroyed) {
+                                moveTaskToBack(false)
+                            }
                         }
                     }
                     payload

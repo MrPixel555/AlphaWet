@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
@@ -60,7 +61,16 @@ class AlphaWetVpnService : VpnService() {
             else -> {
                 currentHttpPort = intent?.getIntExtra(EXTRA_HTTP_PORT, currentHttpPort) ?: currentHttpPort
                 currentSocksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, currentSocksPort) ?: currentSocksPort
-                startForeground(NOTIFICATION_ID, buildNotification())
+                val notification = buildNotification()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
                 startTunnel()
                 return START_STICKY
             }

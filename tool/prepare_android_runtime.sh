@@ -64,6 +64,7 @@ text = path.read_text()
 permissions = [
     'android.permission.INTERNET',
     'android.permission.FOREGROUND_SERVICE',
+    'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
 ]
 for perm in permissions:
     if perm not in text:
@@ -80,6 +81,7 @@ service_snippet = '''
             android:name=".AlphaWetVpnService"
             android:enabled="true"
             android:exported="false"
+            android:foregroundServiceType="systemExempted"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
@@ -87,6 +89,14 @@ service_snippet = '''
         </service>'''
 if 'AlphaWetVpnService' not in text:
     text = text.replace('</application>', service_snippet + '\n    </application>')
+else:
+    text = re.sub(
+        r'(<service\b[^>]*android:name="\.AlphaWetVpnService"[^>]*)(>)',
+        lambda m: m.group(1) if 'android:foregroundServiceType=' in m.group(1) else m.group(1) + ' android:foregroundServiceType="systemExempted"' + m.group(2),
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
 path.write_text(text)
 PY
   echo "[OK] Patched AndroidManifest.xml branding, permissions, and VPN service"

@@ -1,224 +1,146 @@
 package com.awmanager.ui
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 
 class AlphaWetVpnService : VpnService() {
     companion object {
-        private const val ACTION_START = "com.alphacraft.alphawet.action.START_VPN"
-        private const val ACTION_STOP = "com.alphacraft.alphawet.action.STOP_VPN"
-        private const val EXTRA_CONFIG_ID = "configId"
-        private const val NOTIFICATION_CHANNEL_ID = "alphawet_vpn_runtime"
-        private const val NOTIFICATION_ID = 41021
-        private val lock = Object()
-        private var pendingBundle: RuntimeBundle? = null
-        private var pendingResult: Map<String, Any?>? = null
+        private const val CHANNEL_ID = "alphawet_vpn"
+        private const val NOTIFICATION_ID = 2308
+        private const val ACTION_START = "alphawet.action.START"
+        private const val ACTION_STOP = "alphawet.action.STOP"
+        private const val EXTRA_HTTP_PORT = "httpPort"
+        private const val EXTRA_SOCKS_PORT = "socksPort"
 
-        fun requestStart(context: Context, bundle: RuntimeBundle): Map<String, Any?> {
-            synchronized(lock) {
-                pendingBundle = bundle
-                pendingResult = null
-            }
+        @Volatile
+        private var running: Boolean = false
+
+        fun isRunning(): Boolean = running
+
+        fun start(context: Context, httpPort: Int, socksPort: Int) {
             val intent = Intent(context, AlphaWetVpnService::class.java).apply {
                 action = ACTION_START
+                putExtra(EXTRA_HTTP_PORT, httpPort)
+                putExtra(EXTRA_SOCKS_PORT, socksPort)
             }
-            ContextCompat.startForegroundService(context, intent)
-            return waitForPendingResult(timeoutMs = 15000L)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
-        fun requestStop(context: Context, configId: String): Map<String, Any?> {
-            synchronized(lock) {
-                pendingResult = null
-            }
+        fun stop(context: Context) {
             val intent = Intent(context, AlphaWetVpnService::class.java).apply {
                 action = ACTION_STOP
-                putExtra(EXTRA_CONFIG_ID, configId)
             }
             context.startService(intent)
-            return waitForPendingResult(timeoutMs = 8000L) + mapOf("configId" to configId)
-        }
-
-        private fun takePendingBundle(): RuntimeBundle? = synchronized(lock) {
-            val bundle = pendingBundle
-            pendingBundle = null
-            bundle
-        }
-
-        private fun publishPendingResult(result: Map<String, Any?>) {
-            synchronized(lock) {
-                pendingResult = result
-                lock.notifyAll()
-            }
-        }
-
-        private fun waitForPendingResult(timeoutMs: Long): Map<String, Any?> {
-            val deadline = System.currentTimeMillis() + timeoutMs
-            synchronized(lock) {
-                while (pendingResult == null && System.currentTimeMillis() < deadline) {
-                    lock.wait(deadline - System.currentTimeMillis())
-                }
-                return pendingResult ?: mapOf(
-                    "state" to "error",
-                    "success" to false,
-                    "message" to "Timed out while waiting for the Android VPN service.",
-                )
-            }
         }
     }
 
-    private var tunnelFd: Int = -1
+    private var vpnInterface: ParcelFileDescriptor? = null
+    private var currentHttpPort: Int = 10808
+    private var currentSocksPort: Int = 10809
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                val configId = intent.getStringExtra(EXTRA_CONFIG_ID) ?: "unknown"
-                val result = stopRuntime(configId)
-                publishPendingResult(result)
+                stopTunnel()
                 stopSelf()
                 return START_NOT_STICKY
             }
             else -> {
-                startForegroundCompat()
-                val bundle = takePendingBundle()
-                if (bundle == null) {
-                    val result = mapOf(
-                        "state" to "error",
-                        "success" to false,
-                        "message" to "No pending runtime bundle was available for the VPN service.",
-                    )
-                    publishPendingResult(result)
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                val result = startRuntime(bundle)
-                publishPendingResult(result)
-                if (result["success"] != true) {
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
+                currentHttpPort = intent?.getIntExtra(EXTRA_HTTP_PORT, currentHttpPort) ?: currentHttpPort
+                currentSocksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, currentSocksPort) ?: currentSocksPort
+                startForeground(NOTIFICATION_ID, buildNotification())
+                startTunnel()
                 return START_STICKY
             }
         }
     }
 
     override fun onRevoke() {
-        stopRuntime(XrayCoreRuntimeManager.status()["configId"]?.toString() ?: "unknown")
+        stopTunnel()
+        stopSelf()
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        closeTunnelFd()
+        stopTunnel()
         super.onDestroy()
     }
 
-    private fun startRuntime(bundle: RuntimeBundle): Map<String, Any?> {
-        closeTunnelFd()
-        val tunInterface = buildVpnInterface() ?: return mapOf(
-            "state" to "error",
-            "success" to false,
-            "message" to "Android VPN service could not establish the tunnel interface.",
-        )
-        tunnelFd = tunInterface.detachFd()
-        return XrayCoreRuntimeManager.start(bundle, tunFd = tunnelFd)
-    }
-
-    private fun stopRuntime(configId: String): Map<String, Any?> {
-        val result = XrayCoreRuntimeManager.stop(configId)
-        closeTunnelFd()
-        stopForegroundCompat()
-        return result
-    }
-
-    private fun buildVpnInterface(): ParcelFileDescriptor? {
-        return Builder()
+    private fun startTunnel() {
+        stopTunnel()
+        val builder = Builder()
             .setSession("AlphaWet")
             .setMtu(1500)
-            .addAddress("10.31.0.1", 30)
-            .addRoute("0.0.0.0", 0)
-            .addAddress("fdfe:dcba:9876::1", 126)
-            .addRoute("::", 0)
+            .addAddress("10.7.0.2", 32)
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
-            .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    setMetered(false)
-                }
-                runCatching { addDisallowedApplication(packageName) }
-            }
-            .establish()
-    }
+            .addRoute("0.0.0.0", 0)
 
-    private fun closeTunnelFd() {
-        if (tunnelFd < 0) {
-            return
-        }
         runCatching {
-            ParcelFileDescriptor.adoptFd(tunnelFd).close()
+            builder.addRoute("::", 0)
         }
-        tunnelFd = -1
-    }
 
-    private fun startForegroundCompat() {
-        createNotificationChannel()
-        val notification = buildNotification()
+        runCatching {
+            builder.addDisallowedApplication(packageName)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification)
+            builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", currentHttpPort))
+        }
+
+        vpnInterface = builder.establish()
+        running = vpnInterface != null
+    }
+
+    private fun stopTunnel() {
+        running = false
+        runCatching { vpnInterface?.close() }
+        vpnInterface = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.ic_lock_lock)
+        .setContentTitle("AlphaWet")
+        .setContentText("Whole-device tunnel is active")
+        .setCategory(NotificationCompat.CATEGORY_SERVICE)
+        .setOngoing(true)
+        .setContentIntent(mainActivityPendingIntent())
+        .build()
+
+    private fun mainActivityPendingIntent(): PendingIntent {
+        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         } else {
-            @Suppress("DEPRECATION")
-            startForeground(NOTIFICATION_ID, notification)
+            PendingIntent.FLAG_UPDATE_CURRENT
         }
+        return PendingIntent.getActivity(this, 0, intent, flags)
     }
 
-    private fun stopForegroundCompat() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-    }
-
-    private fun buildNotification(): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: Intent()
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("AlphaWet is running")
-            .setContentText("Full-device tunnel is active for the selected profile.")
-            .setSmallIcon(android.R.drawable.presence_online)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(pendingIntent)
-            .build()
-            .apply {
-                flags = flags or Notification.FLAG_ONGOING_EVENT
-            }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
+    override fun onCreate() {
+        super.onCreate()
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            "AlphaWet VPN Runtime",
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = "Shows the active AlphaWet device tunnel status."
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "AlphaWet VPN",
+                NotificationManager.IMPORTANCE_LOW,
+            )
+            manager.createNotificationChannel(channel)
         }
-        manager.createNotificationChannel(channel)
     }
 }

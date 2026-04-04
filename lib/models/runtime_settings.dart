@@ -2,7 +2,7 @@ class RuntimeSettings {
   const RuntimeSettings({
     this.httpPort = 10808,
     this.socksPort = 10809,
-    this.enableDeviceVpn = false,
+    this.enableDeviceVpn = true,
     this.vpnPermissionGranted = false,
   });
 
@@ -30,6 +30,8 @@ class RuntimeSettings {
   bool get portsAreDistinct => httpPort != socksPort;
 
   String get proxySummary => 'HTTP 127.0.0.1:$httpPort • SOCKS 127.0.0.1:$socksPort';
+
+  String get modeLabel => enableDeviceVpn ? 'Whole device tunnel' : 'App-local proxy';
 
   String? validate() {
     if (!_isValidPort(httpPort)) {

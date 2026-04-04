@@ -11,21 +11,21 @@ import 'runtime/platform_vpn_engine_factory.dart';
 import 'runtime/runtime_bridge.dart';
 import 'runtime/vpn_engine.dart';
 import 'services/app_log_export_service.dart';
+import 'services/config_store.dart';
 import 'services/app_logger.dart';
 import 'services/aw_import_exception.dart';
 import 'services/aw_import_service.dart';
 import 'services/aw_xray_builder_exception.dart';
 import 'services/aw_xray_config_builder.dart';
-import 'services/config_entries_store.dart';
 import 'services/runtime_settings_store.dart';
 import 'widgets/config_card.dart';
 
 void main() {
-  runApp(const AlphaWetApp());
+  runApp(const AwManagerApp());
 }
 
-class AlphaWetApp extends StatelessWidget {
-  const AlphaWetApp({super.key});
+class AwManagerApp extends StatelessWidget {
+  const AwManagerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -66,9 +66,10 @@ class _HomeScreenState extends State<HomeScreen> {
   late final AwXrayConfigBuilder _xrayConfigBuilder;
   late final AppLogExportService _logExportService;
   late final RuntimeSettingsStore _runtimeSettingsStore;
-  late final ConfigEntriesStore _configEntriesStore;
   late final VpnEngine _vpnEngine;
-  Timer? _runtimeStatusTimer;
+  late final ConfigStore _configStore;
+  Timer? _runtimeWatchdog;
+  bool _isRecoveringRuntime = false;
   bool _isImporting = false;
   bool _isExportingLogs = false;
   bool _isLoadingRuntimeSettings = true;
@@ -81,18 +82,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _xrayConfigBuilder = AwXrayConfigBuilder(logger: _logger);
     _logExportService = AppLogExportService(logger: _logger);
     _runtimeSettingsStore = RuntimeSettingsStore();
-    _configEntriesStore = ConfigEntriesStore();
+    _configStore = ConfigStore();
     _vpnEngine = createVpnEngine(logger: _logger);
+    _loadPersistedConfigs();
     _loadRuntimeSettings();
-    _runtimeStatusTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _pollRuntimeStatus(),
-    );
+    _runtimeWatchdog = Timer.periodic(const Duration(seconds: 8), (_) => _pollRuntimeHealth());
   }
 
   @override
   void dispose() {
-    _runtimeStatusTimer?.cancel();
+    _runtimeWatchdog?.cancel();
     super.dispose();
   }
 
@@ -103,29 +102,16 @@ class _HomeScreenState extends State<HomeScreen> {
       final RuntimeSettings merged = loaded.copyWith(
         vpnPermissionGranted: permissionGranted || loaded.vpnPermissionGranted,
       );
-      final List<StoredConfigEntry> storedConfigs = await _configEntriesStore.load();
-      final List<ConfigEntry> restored = storedConfigs
-          .map((StoredConfigEntry item) => _buildEntryFromProfile(
-                id: item.id,
-                path: item.path,
-                importedAt: item.importedAt,
-                profile: item.profile,
-                importStatus: item.importStatus,
-                payloadKind: item.payloadKind,
-                isSecureEnvelope: item.isSecureEnvelope,
-              ))
-          .toList(growable: false);
       if (!mounted) {
         return;
       }
       setState(() {
         _runtimeSettings = merged;
-        _configs
-          ..clear()
-          ..addAll(restored);
         _isLoadingRuntimeSettings = false;
       });
-      await _pollRuntimeStatus();
+      if (_configs.isNotEmpty) {
+        _rebuildAllConfigsForRuntimeSettings();
+      }
     } catch (error, stackTrace) {
       _logger.error('HomeScreen', 'Failed to load runtime settings.', error: error, stackTrace: stackTrace);
       if (!mounted) {
@@ -133,58 +119,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       setState(() {
         _runtimeSettings = RuntimeSettings.defaults;
-        _configs.clear();
         _isLoadingRuntimeSettings = false;
       });
     }
-  }
-
-  Future<void> _persistConfigs() async {
-    try {
-      await _configEntriesStore.save(_configs);
-    } catch (error, stackTrace) {
-      _logger.error('HomeScreen', 'Failed to persist imported configs.', error: error, stackTrace: stackTrace);
-    }
-  }
-
-  Future<void> _pollRuntimeStatus() async {
-    if (!mounted || _configs.isEmpty) {
-      return;
-    }
-
-    final Map<Object?, Object?>? status = await RuntimeBridge.getCoreStatus();
-    if (!mounted || status == null) {
-      return;
-    }
-
-    final bool running = status['state']?.toString().trim().toLowerCase() == 'running';
-    final String? activeConfigId = status['configId']?.toString();
-    final String? sessionId = status['sessionId']?.toString();
-    final String message = (status['message'] as String? ?? '').trim();
-
-    setState(() {
-      for (int index = 0; index < _configs.length; index += 1) {
-        final ConfigEntry item = _configs[index];
-        final bool shouldBeActive = running && activeConfigId != null && item.id == activeConfigId;
-        if (shouldBeActive) {
-          _configs[index] = item.copyWith(
-            isEnabled: true,
-            connectionState: VpnConnectionState.connected,
-            engineSessionId: sessionId,
-            engineMessage: message.isEmpty ? item.engineMessage : message,
-          );
-        } else if (item.isEnabled && !item.isBusy) {
-          _configs[index] = item.copyWith(
-            isEnabled: false,
-            connectionState: item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed,
-            engineSessionId: null,
-            engineMessage: running
-                ? 'Another profile is now active.'
-                : (message.isEmpty ? 'Runtime stopped.' : message),
-          );
-        }
-      }
-    });
   }
 
   Future<void> _importConfig() async {
@@ -259,7 +196,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _configs.insert(0, entry);
       });
       await _persistConfigs();
-
       if (!mounted) {
         return;
       }
@@ -367,12 +303,168 @@ class _HomeScreenState extends State<HomeScreen> {
       xrayBuildError: xrayBuildError,
       connectionState: xrayConfigJson != null ? VpnConnectionState.ready : VpnConnectionState.failed,
       engineMessage: xrayConfigJson != null
-          ? 'Runtime prepared with ${_runtimeSettings.proxySummary}.'
+          ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
           : (xrayBuildError ?? 'Xray build failed.'),
     );
   }
 
-  Future<void> _rebuildAllConfigsForRuntimeSettings() async {
+  Future<void> _loadPersistedConfigs() async {
+    try {
+      final List<PersistedConfigRecord> stored = await _configStore.load();
+      if (!mounted || stored.isEmpty) {
+        return;
+      }
+      final List<ConfigEntry> rebuilt = stored
+          .where((PersistedConfigRecord item) => item.id.trim().isNotEmpty)
+          .map(
+            (PersistedConfigRecord item) => _buildEntryFromProfile(
+              id: item.id,
+              path: item.path,
+              importedAt: item.importedAt,
+              profile: item.profile,
+              importStatus: item.importStatus,
+              payloadKind: item.payloadKind,
+              isSecureEnvelope: item.isSecureEnvelope,
+            ),
+          )
+          .toList(growable: false);
+      setState(() {
+        _configs
+          ..clear()
+          ..addAll(rebuilt);
+      });
+    } catch (error, stackTrace) {
+      _logger.error('HomeScreen', 'Failed to restore saved configs.', error: error, stackTrace: stackTrace);
+    }
+  }
+
+  Future<void> _persistConfigs() async {
+    final List<PersistedConfigRecord> payload = _configs
+        .map(
+          (ConfigEntry item) => PersistedConfigRecord(
+            id: item.id,
+            path: item.path,
+            importedAt: item.importedAt,
+            profile: item.profile,
+            importStatus: item.importStatus,
+            payloadKind: item.payloadKind,
+            isSecureEnvelope: item.isSecureEnvelope,
+          ),
+        )
+        .toList(growable: false);
+    await _configStore.save(payload);
+  }
+
+  Future<void> _pollRuntimeHealth() async {
+    if (!mounted || _isRecoveringRuntime) {
+      return;
+    }
+    ConfigEntry? active;
+    for (final ConfigEntry item in _configs) {
+      if (item.isEnabled) {
+        active = item;
+        break;
+      }
+    }
+    if (active == null || active.isBusy) {
+      return;
+    }
+    final Map<Object?, Object?>? status = await RuntimeBridge.getCoreStatus();
+    final String state = (status?['state'] as String? ?? 'idle').trim().toLowerCase();
+    if (state == 'running') {
+      return;
+    }
+    _isRecoveringRuntime = true;
+    try {
+      _logger.warning('HomeScreen', 'Runtime dropped unexpectedly. Attempting automatic recovery.');
+      final ConfigEntry latest = _findEntryById(active.id) ?? active;
+      _setEntry(
+        active.id,
+        latest.copyWith(
+          isEnabled: false,
+          connectionState: VpnConnectionState.failed,
+          engineSessionId: null,
+          engineMessage: 'Connection dropped. AlphaWet is reconnecting automatically...',
+        ),
+      );
+      await _toggleConfig(active.id, true);
+    } finally {
+      _isRecoveringRuntime = false;
+    }
+  }
+
+  Future<void> _disconnectOtherConfigs(String currentId) async {
+    final List<ConfigEntry> others = _configs
+        .where((ConfigEntry item) => item.id != currentId && item.isEnabled)
+        .toList(growable: false);
+    for (final ConfigEntry other in others) {
+      _setEntry(
+        other.id,
+        other.copyWith(
+          connectionState: VpnConnectionState.disconnecting,
+          engineMessage: 'Stopping previous connection...',
+        ),
+      );
+      final VpnEngineResult result = await _vpnEngine.disconnect(other);
+      final ConfigEntry latest = _findEntryById(other.id) ?? other;
+      _setEntry(
+        other.id,
+        latest.copyWith(
+          isEnabled: false,
+          connectionState: result.state,
+          engineMessage: result.message,
+          engineSessionId: null,
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteConfig(String id) async {
+    final ConfigEntry? entry = _findEntryById(id);
+    if (entry == null) {
+      return;
+    }
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete config?'),
+          content: Text('Remove "${entry.name}" from AlphaWet?'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    if (entry.isEnabled) {
+      await _toggleConfig(id, false);
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _configs.removeWhere((ConfigEntry item) => item.id == id);
+    });
+    await _persistConfigs();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${entry.name} was deleted.')),
+    );
+  }
+
+  void _rebuildAllConfigsForRuntimeSettings() {
     setState(() {
       for (int index = 0; index < _configs.length; index += 1) {
         final ConfigEntry current = _configs[index];
@@ -392,12 +484,11 @@ class _HomeScreenState extends State<HomeScreen> {
           connectionState: rebuilt.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed,
           engineSessionId: null,
           engineMessage: rebuilt.isXrayReady
-              ? 'Runtime settings changed. Profiles were rebuilt with ${_runtimeSettings.proxySummary}.'
+              ? 'Runtime settings changed. Rebuilt with ${_runtimeSettings.proxySummary}.'
               : rebuilt.xrayBuildError,
         );
       }
     });
-    await _persistConfigs();
   }
 
   Future<void> _openRuntimeSettings() async {
@@ -421,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!granted && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Android VPN permission was not granted. Full-device mode remains off.'),
+            content: Text('Android VPN permission was not granted. Whole-device tunnel stayed off.'),
           ),
         );
       }
@@ -429,7 +520,6 @@ class _HomeScreenState extends State<HomeScreen> {
       nextSettings = nextSettings.copyWith(vpnPermissionGranted: false);
     }
 
-    await _disconnectOthersExcept('__runtime_settings__');
     await _runtimeSettingsStore.save(nextSettings);
     if (!mounted) {
       return;
@@ -438,7 +528,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _runtimeSettings = nextSettings;
     });
-    await _rebuildAllConfigsForRuntimeSettings();
+    _rebuildAllConfigsForRuntimeSettings();
 
     if (!mounted) {
       return;
@@ -447,7 +537,7 @@ class _HomeScreenState extends State<HomeScreen> {
       SnackBar(
         content: Text(
           nextSettings.enableDeviceVpn
-              ? 'Runtime settings saved. Full-device tunneling is enabled.'
+              ? 'Runtime settings saved. Whole-device tunnel is enabled by default.'
               : 'Runtime settings saved. ${nextSettings.proxySummary}',
         ),
       ),
@@ -461,14 +551,56 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (!value) {
-      await _disconnectEntry(id, current);
+      _setEntry(
+        id,
+        current.copyWith(
+          connectionState: VpnConnectionState.disconnecting,
+          engineMessage: 'Stopping Xray core...',
+        ),
+      );
+      final VpnEngineResult result = await _vpnEngine.disconnect(current);
+      final ConfigEntry latest = _findEntryById(id) ?? current;
+      _setEntry(
+        id,
+        latest.copyWith(
+          isEnabled: false,
+          connectionState: result.state,
+          engineMessage: result.message,
+          engineSessionId: null,
+        ),
+      );
+      await _persistConfigs();
       return;
     }
 
-    await _disconnectOthersExcept(id);
+    if (_runtimeSettings.enableDeviceVpn && !_runtimeSettings.vpnPermissionGranted) {
+      final bool granted = await RuntimeBridge.ensureVpnPermission();
+      if (!mounted) {
+        return;
+      }
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Android VPN permission is required for whole-device tunneling.')),
+        );
+        return;
+      }
+      final RuntimeSettings updatedSettings = _runtimeSettings.copyWith(
+        enableDeviceVpn: true,
+        vpnPermissionGranted: true,
+      );
+      await _runtimeSettingsStore.save(updatedSettings);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _runtimeSettings = updatedSettings;
+      });
+      _rebuildAllConfigsForRuntimeSettings();
+    }
 
+    await _disconnectOtherConfigs(id);
     final ConfigEntry? refreshedCurrent = _findEntryById(id);
-    if (refreshedCurrent == null || refreshedCurrent.isBusy) {
+    if (refreshedCurrent == null) {
       return;
     }
 
@@ -476,12 +608,12 @@ class _HomeScreenState extends State<HomeScreen> {
       id,
       refreshedCurrent.copyWith(
         connectionState: VpnConnectionState.validating,
-        engineMessage: 'Validating generated runtime...',
+        engineMessage: 'Validating generated Xray config...',
       ),
     );
-    final ConfigEntry validateTarget = _findEntryById(id) ?? refreshedCurrent;
+    final ConfigEntry validateTarget = _findEntryById(id) ?? current;
     final VpnEngineResult validateResult = await _vpnEngine.validate(validateTarget, _runtimeSettings);
-    final ConfigEntry afterValidate = _findEntryById(id) ?? refreshedCurrent;
+    final ConfigEntry afterValidate = _findEntryById(id) ?? current;
     _setEntry(
       id,
       afterValidate.copyWith(
@@ -495,13 +627,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final ConfigEntry readyToConnect = _findEntryById(id) ?? refreshedCurrent;
+    final ConfigEntry readyToConnect = _findEntryById(id) ?? current;
     _setEntry(
       id,
       readyToConnect.copyWith(
         isEnabled: true,
         connectionState: VpnConnectionState.connecting,
-        engineMessage: 'Starting runtime...',
+        engineMessage: 'Starting Xray core...',
         lastValidatedAt: DateTime.now(),
       ),
     );
@@ -519,40 +651,7 @@ class _HomeScreenState extends State<HomeScreen> {
         lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
       ),
     );
-  }
-
-  Future<void> _disconnectOthersExcept(String id) async {
-    final List<ConfigEntry> activeEntries = _configs
-        .where((ConfigEntry item) => item.id != id && (item.isEnabled || item.connectionState == VpnConnectionState.connected))
-        .toList(growable: false);
-    for (final ConfigEntry entry in activeEntries) {
-      await _disconnectEntry(entry.id, entry, replacementMessage: 'Stopped because another profile was activated.');
-    }
-  }
-
-  Future<void> _disconnectEntry(
-    String id,
-    ConfigEntry current, {
-    String? replacementMessage,
-  }) async {
-    _setEntry(
-      id,
-      current.copyWith(
-        connectionState: VpnConnectionState.disconnecting,
-        engineMessage: 'Stopping runtime...',
-      ),
-    );
-    final VpnEngineResult result = await _vpnEngine.disconnect(current);
-    final ConfigEntry latest = _findEntryById(id) ?? current;
-    _setEntry(
-      id,
-      latest.copyWith(
-        isEnabled: false,
-        connectionState: result.state,
-        engineMessage: replacementMessage ?? result.message,
-        engineSessionId: null,
-      ),
-    );
+    await _persistConfigs();
   }
 
   ConfigEntry? _findEntryById(String id) {
@@ -769,7 +868,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('AlphaWet'),
@@ -794,7 +892,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       bottomNavigationBar: BottomAppBar(
-        height: 112,
+        height: 108,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
@@ -818,20 +916,13 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.save_alt_rounded),
-                    label: Text(_isExportingLogs ? 'Exporting...' : 'Export Log'),
+                    label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              'made by AlphaCraft',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    fontSize: 11,
-                  ),
-            ),
+            const SizedBox(height: 8),
+            const Text('made by AlphaCraft', style: TextStyle(fontSize: 12)),
           ],
         ),
       ),
@@ -882,7 +973,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: <Widget>[
                                       Text(
-                                        'AlphaWet',
+                                        'Runtime diagnostics',
                                         style: theme.textTheme.titleLarge?.copyWith(
                                           fontWeight: FontWeight.w700,
                                         ),
@@ -891,7 +982,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       Text(
                                         _isLoadingRuntimeSettings
                                             ? 'Loading runtime settings...'
-                                            : 'Current runtime profile: ${_runtimeSettings.proxySummary}',
+                                            : 'Current listener profile: ${_runtimeSettings.proxySummary}',
                                         style: theme.textTheme.bodyMedium?.copyWith(
                                           color: colors.onSurfaceVariant,
                                         ),
@@ -923,8 +1014,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 _MetricChip(
                                   icon: Icons.vpn_lock_outlined,
-                                  label: 'Full device',
-                                  value: _runtimeSettings.enableDeviceVpn ? 'On' : 'Off',
+                                  label: 'Tunnel',
+                                  value: _runtimeSettings.enableDeviceVpn ? 'Whole device' : 'App only',
                                 ),
                               ],
                             ),
@@ -938,7 +1029,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                                 child: Text(
-                                  'Full-device mode routes the whole device through the active profile while keeping the local HTTP and SOCKS listeners available for checks and diagnostics.',
+                                  'AlphaWet will try to tunnel the whole device through the local runtime. The app process itself is excluded from the VPN interface to avoid self-loop routing.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: colors.onSecondaryContainer,
                                   ),
@@ -981,14 +1072,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 20),
                     Text(
-                      'Profiles',
+                      'Imported configs',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Profiles are rebuilt with your current ports and saved locally, so they stay available after the app is closed and opened again.',
+                      'Imported configs stay saved on this device. AlphaWet rebuilds each one with the current ports and can route the whole device when that mode is enabled.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),
@@ -1027,7 +1118,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Import a .aw file to save it locally, build the runtime, and connect it whenever you want.',
+                          'Import a .aw file to validate it, build the runtime config, and connect with AlphaWet.',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodyLarge?.copyWith(
                             color: colors.onSurfaceVariant,
@@ -1053,6 +1144,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         runtimeSettings: _runtimeSettings,
                         onToggle: (bool value) => _toggleConfig(entry.id, value),
                         onPing: () => _pingConfig(entry.id),
+                        onDelete: () => _deleteConfig(entry.id),
                       );
                     },
                     childCount: _configs.isEmpty ? 0 : (_configs.length * 2) - 1,
@@ -1186,12 +1278,12 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
           ),
           const SizedBox(height: 18),
           Text(
-            'Connection settings',
+            'Runtime settings',
             style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 6),
           Text(
-            'Saved settings are restored automatically when AlphaWet opens again.',
+            'AlphaWet keeps these ports across launches. Whole-device tunneling is on by default.',
             style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
@@ -1219,7 +1311,7 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
             contentPadding: EdgeInsets.zero,
             title: const Text('Tunnel the whole device'),
             subtitle: const Text(
-              'When enabled, AlphaWet starts an Android VPN service and routes device traffic through the active profile.',
+              'When enabled, AlphaWet asks Android for VPN permission and routes device traffic through the local runtime.',
             ),
             value: _enableDeviceVpn,
             onChanged: (bool value) {

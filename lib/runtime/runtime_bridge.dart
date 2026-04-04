@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 class RuntimeBridge {
   RuntimeBridge._();
 
-  static const MethodChannel _channel = MethodChannel('alphawet/xray_core');
+  static const MethodChannel _channel = MethodChannel('aw_manager_ui/xray_core');
 
   static Future<bool> ensureVpnPermission() async {
     if (!Platform.isAndroid) {
@@ -23,17 +23,28 @@ class RuntimeBridge {
     return granted ?? false;
   }
 
-
   static Future<Map<Object?, Object?>?> getCoreStatus() async {
     if (!Platform.isAndroid) {
-      return <Object?, Object?>{'state': 'idle', 'success': true};
+      return <Object?, Object?>{
+        'success': true,
+        'state': 'idle',
+        'message': 'Android runtime bridge is not active on this platform.',
+      };
     }
     try {
       return await _channel.invokeMapMethod<Object?, Object?>('getCoreStatus');
     } on MissingPluginException {
-      return <Object?, Object?>{'state': 'idle', 'success': false};
-    } on PlatformException {
-      return <Object?, Object?>{'state': 'idle', 'success': false};
+      return <Object?, Object?>{
+        'success': false,
+        'state': 'failed',
+        'message': 'Android runtime bridge is missing.',
+      };
+    } on PlatformException catch (error) {
+      return <Object?, Object?>{
+        'success': false,
+        'state': 'failed',
+        'message': error.message ?? 'Failed to query runtime state.',
+      };
     }
   }
 
@@ -48,18 +59,41 @@ class RuntimeBridge {
     int? targetPort,
   }) async {
     final bool proxyAvailable = await _isLocalTcpPortOpen(httpPort);
-    Object? localProbeError;
 
     if (proxyAvailable) {
       try {
         return await _probeThroughHttpProxy(httpPort: httpPort, url: url);
       } catch (error) {
-        localProbeError = error;
+        if (targetHost != null && targetPort != null) {
+          final Map<Object?, Object?> direct = await _probeDirectTcp(
+            host: targetHost,
+            port: targetPort,
+          );
+          return <Object?, Object?>{
+            ...direct,
+            'message': '${direct['message']} Proxy probe via 127.0.0.1:$httpPort failed first: $error',
+          };
+        }
+        return <Object?, Object?>{
+          'success': false,
+          'message': 'Proxy probe via 127.0.0.1:$httpPort failed: $error',
+        };
       }
     }
 
+    if (targetHost != null && targetPort != null) {
+      final Map<Object?, Object?> direct = await _probeDirectTcp(
+        host: targetHost,
+        port: targetPort,
+      );
+      return <Object?, Object?>{
+        ...direct,
+        'message': '${direct['message']} (Direct server probe used because the local Xray proxy is not active yet.)',
+      };
+    }
+
     try {
-      final Map<Object?, Object?>? nativeResult = await _channel.invokeMapMethod<Object?, Object?>(
+      return await _channel.invokeMapMethod<Object?, Object?>(
         'pingProxy',
         <String, Object?>{
           'httpPort': httpPort,
@@ -72,50 +106,17 @@ class RuntimeBridge {
           'targetPort': targetPort,
         },
       );
-      if (nativeResult != null) {
-        if (localProbeError != null && nativeResult['message'] is String) {
-          return <Object?, Object?>{
-            ...nativeResult,
-            'message': '${nativeResult['message']} Local probe failed first: $localProbeError',
-          };
-        }
-        return nativeResult;
-      }
     } on MissingPluginException {
-      if (targetHost == null || targetPort == null) {
-        return <Object?, Object?>{
-          'success': false,
-          'message': 'Ping is unavailable because the Android runtime bridge is missing.',
-        };
-      }
-    } on PlatformException catch (error) {
-      if (targetHost == null || targetPort == null) {
-        return <Object?, Object?>{
-          'success': false,
-          'message': error.message ?? 'Ping is unavailable because the Android runtime bridge is not responding.',
-        };
-      }
-    }
-
-    if (targetHost != null && targetPort != null) {
-      final Map<Object?, Object?> direct = await _probeDirectTcp(
-        host: targetHost,
-        port: targetPort,
-      );
       return <Object?, Object?>{
-        ...direct,
-        'message': localProbeError == null
-            ? '${direct['message']} (Direct server probe was used because the local runtime was not active.)'
-            : '${direct['message']} Local proxy probe failed first: $localProbeError',
+        'success': false,
+        'message': 'Ping is unavailable because no local proxy is active and the Android runtime bridge is missing.',
+      };
+    } on PlatformException catch (error) {
+      return <Object?, Object?>{
+        'success': false,
+        'message': error.message ?? 'Ping is unavailable because no local proxy is active.',
       };
     }
-
-    return <Object?, Object?>{
-      'success': false,
-      'message': localProbeError == null
-          ? 'Ping could not reach the runtime.'
-          : 'Ping could not recover the runtime after the local proxy probe failed: $localProbeError',
-    };
   }
 
   static Future<bool> _isLocalTcpPortOpen(int port) async {
@@ -145,7 +146,7 @@ class RuntimeBridge {
       final Uri uri = Uri.parse(url);
       final HttpClientRequest request = await client.getUrl(uri);
       request.followRedirects = false;
-      request.headers.set(HttpHeaders.userAgentHeader, 'AlphaWet/1.0');
+      request.headers.set(HttpHeaders.userAgentHeader, 'AlphaWet/2.3.8');
       final HttpClientResponse response = await request.close();
       await response.drain<void>();
       stopwatch.stop();

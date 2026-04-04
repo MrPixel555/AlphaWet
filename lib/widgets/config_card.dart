@@ -11,12 +11,14 @@ class ConfigCard extends StatelessWidget {
     required this.runtimeSettings,
     required this.onToggle,
     required this.onPing,
+    required this.onDelete,
   });
 
   final ConfigEntry entry;
   final RuntimeSettings runtimeSettings;
   final ValueChanged<bool> onToggle;
   final VoidCallback onPing;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -97,12 +99,6 @@ class ConfigCard extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
                 _StatusPill(
-                  icon: entry.isEnabled
-                      ? Icons.power_settings_new_rounded
-                      : Icons.pause_circle_outline_rounded,
-                  label: entry.isEnabled ? 'Active' : 'Idle',
-                ),
-                _StatusPill(
                   icon: _runtimeIcon(entry.connectionState),
                   label: entry.connectionState.label,
                 ),
@@ -119,6 +115,10 @@ class ConfigCard extends StatelessWidget {
                   label: 'SOCKS ${runtimeSettings.socksPort}',
                 ),
                 _StatusPill(
+                  icon: runtimeSettings.enableDeviceVpn ? Icons.vpn_lock_rounded : Icons.lan_rounded,
+                  label: runtimeSettings.modeLabel,
+                ),
+                _StatusPill(
                   icon: Icons.speed_rounded,
                   label: entry.pingLabel,
                 ),
@@ -128,10 +128,7 @@ class ConfigCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (_hasText(entry.serverName) ||
-                _hasText(entry.shortId) ||
-                _hasText(entry.engineSessionId) ||
-                _hasText(entry.engineMessage)) ...<Widget>[
+            if (_hasText(entry.serverName) || _hasText(entry.engineMessage)) ...<Widget>[
               const SizedBox(height: 16),
               Container(
                 width: double.infinity,
@@ -145,13 +142,8 @@ class ConfigCard extends StatelessWidget {
                   children: <Widget>[
                     if (_hasText(entry.serverName))
                       _DetailLine(
-                        label: 'SNI',
+                        label: 'Server',
                         value: entry.serverName!,
-                      ),
-                    if (_hasText(entry.shortId))
-                      _DetailLine(
-                        label: 'Short ID',
-                        value: _maskShortId(entry.shortId!),
                       ),
                     _DetailLine(
                       label: 'Proxy',
@@ -159,13 +151,8 @@ class ConfigCard extends StatelessWidget {
                     ),
                     _DetailLine(
                       label: 'Mode',
-                      value: runtimeSettings.enableDeviceVpn ? 'FULL DEVICE VPN' : 'LOCAL PROXY',
+                      value: runtimeSettings.modeLabel,
                     ),
-                    if (_hasText(entry.engineSessionId))
-                      _DetailLine(
-                        label: 'Session',
-                        value: entry.engineSessionId!,
-                      ),
                     if (_hasText(entry.engineMessage))
                       _DetailLine(
                         label: 'Runtime',
@@ -193,9 +180,8 @@ class ConfigCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 18),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: <Widget>[
                 FilledButton.tonalIcon(
                   onPressed: entry.isPinging || entry.isBusy ? null : onPing,
@@ -208,12 +194,22 @@ class ConfigCard extends StatelessWidget {
                       : const Icon(Icons.network_ping_rounded),
                   label: Text(entry.isPinging ? 'Pinging...' : 'Ping'),
                 ),
-                Text(
-                  _runtimeSummary(entry),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _runtimeSummary(entry),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
                   ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Delete config',
+                  onPressed: entry.isBusy ? null : onDelete,
+                  icon: const Icon(Icons.delete_outline_rounded),
                 ),
               ],
             ),
@@ -225,38 +221,31 @@ class ConfigCard extends StatelessWidget {
 
   String _runtimeSummary(ConfigEntry entry) {
     if (!entry.isXrayReady) {
-      return 'Runtime blocked';
+      return 'Build failed • runtime blocked';
     }
     switch (entry.connectionState) {
       case VpnConnectionState.connected:
         return runtimeSettings.enableDeviceVpn
-            ? 'Full-device tunnel active'
-            : 'Local proxy active';
+            ? 'Connected • whole device tunnel requested'
+            : 'Connected • local proxy ready';
       case VpnConnectionState.connecting:
-        return 'Starting runtime...';
+        return 'Starting connection...';
       case VpnConnectionState.validating:
         return 'Validating config...';
       case VpnConnectionState.failed:
-        return 'Runtime failed';
+        return 'Connection failed';
       case VpnConnectionState.ready:
         return entry.isSecureEnvelope
-            ? 'Ready • verified import'
-            : 'Ready • imported';
+            ? 'Verified import • ready'
+            : 'Imported • ready';
       case VpnConnectionState.disconnecting:
-        return 'Stopping runtime...';
+        return 'Stopping connection...';
       case VpnConnectionState.idle:
-        return 'Runtime idle';
+        return 'Not connected';
     }
   }
 
   bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
-
-  String _maskShortId(String value) {
-    if (value.length <= 8) {
-      return value;
-    }
-    return '${value.substring(0, 8)}...';
-  }
 
   IconData _runtimeIcon(VpnConnectionState state) {
     switch (state) {
@@ -335,7 +324,6 @@ class _StatusPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: colors.surfaceContainerHighest.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colors.outlineVariant),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

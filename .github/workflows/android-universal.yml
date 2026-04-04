@@ -14,6 +14,7 @@ jobs:
 
     env:
       BUILD_ROOT: /tmp/alpha_wet
+      AW_INCLUDE_X86_64: '1'
 
     steps:
       - name: Checkout repository
@@ -63,11 +64,6 @@ jobs:
           [ -n "${AW_ED25519_PUBLIC_KEY_BASE64:-}" ] && args+=("--dart-define=AW_ED25519_PUBLIC_KEY_BASE64=${AW_ED25519_PUBLIC_KEY_BASE64}")
           [ -n "${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT:-}" ] && args+=("--dart-define=AW_ALLOW_LEGACY_PLAINTEXT_IMPORT=${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT}")
           printf 'DART_DEFINE_ARGS=%s\n' "${args[*]}" >> "$GITHUB_ENV"
-          if [ ${#args[@]} -eq 0 ]; then
-            echo "[INFO] No optional dart-defines were supplied via GitHub Secrets."
-          else
-            echo "[OK] Optional dart-defines were composed from GitHub Secrets."
-          fi
 
       - name: Build universal release APK
         working-directory: ${{ env.BUILD_ROOT }}
@@ -85,23 +81,3 @@ jobs:
           name: alphawet-universal-apk
           path: dist/alphawet-universal-release.apk
           if-no-files-found: error
-
-      - name: Create trimmed failure snapshot
-        if: failure()
-        run: |
-          mkdir -p dist
-          tar -C "$BUILD_ROOT" -czf dist/aw-manager-ui-failure-snapshot.tgz \
-            --exclude='./build' \
-            --exclude='./.dart_tool' \
-            --exclude='./android/.gradle' \
-            --exclude='./android/app/build' \
-            --exclude='./.git' \
-            .
-
-      - name: Upload prepared Android project on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: aw-manager-ui-prepared-project-failure-snapshot
-          path: dist/aw-manager-ui-failure-snapshot.tgz
-          if-no-files-found: ignore

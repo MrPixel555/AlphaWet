@@ -7,7 +7,7 @@ OVERLAY_CPP_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/cpp"
 ANDROID_DIR="${ROOT_DIR}/android"
 JNI_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 CPP_TARGET_DIR="${ANDROID_DIR}/app/src/main/cpp"
-INCLUDE_X86_64="${ALPHAWET_INCLUDE_X86_64:-0}"
+INCLUDE_X86_64="${AW_INCLUDE_X86_64:-1}"
 
 if [ ! -d "${ANDROID_DIR}" ]; then
   echo "[ERROR] android/ directory was not found. Run flutter create --platforms=android first."
@@ -59,39 +59,37 @@ if [ -f "${MANIFEST_PATH}" ]; then
 from pathlib import Path
 import re
 import sys
-
 path = Path(sys.argv[1])
 text = path.read_text()
-needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
 permissions = [
     'android.permission.INTERNET',
     'android.permission.FOREGROUND_SERVICE',
-    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
 ]
-for permission in permissions:
-    if permission not in text:
-        text = text.replace(needle, needle + f'\n    <uses-permission android:name="{permission}" />', 1)
+for perm in permissions:
+    if perm not in text:
+        needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+        text = text.replace(needle, needle + f'\n    <uses-permission android:name="{perm}" />', 1)
 if 'android:extractNativeLibs=' not in text:
     text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
-if 'AlphaWetVpnService' not in text:
-    service_block = '''
+if 'android:label="AlphaWet"' not in text:
+    text = re.sub(r'<application\b([^>]*?)android:label="[^"]*"', r'<application\1android:label="AlphaWet"', text, count=1)
+    if 'android:label="AlphaWet"' not in text:
+        text = re.sub(r'<application\b', '<application android:label="AlphaWet"', text, count=1)
+service_snippet = '''
         <service
             android:name=".AlphaWetVpnService"
+            android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="vpn-runtime" />
-        </service>
-'''
-    text = text.replace('</application>', service_block + '    </application>', 1)
+        </service>'''
+if 'AlphaWetVpnService' not in text:
+    text = text.replace('</application>', service_snippet + '\n    </application>')
 path.write_text(text)
 PY
-  echo "[OK] Patched AndroidManifest.xml permissions/VPN service/extraction flags"
+  echo "[OK] Patched AndroidManifest.xml branding, permissions, and VPN service"
 fi
 
 BUILD_KTS="${ANDROID_DIR}/app/build.gradle.kts"
@@ -99,6 +97,7 @@ BUILD_GROOVY="${ANDROID_DIR}/app/build.gradle"
 if [ -f "${BUILD_KTS}" ]; then
   python3 - <<'PY' "${BUILD_KTS}"
 from pathlib import Path
+import re
 import sys
 path = Path(sys.argv[1])
 text = path.read_text()
@@ -131,7 +130,7 @@ else
 fi
 
 mkdir -p "${JNI_LIBS_DIR}"
-find "${JNI_LIBS_DIR}" -type f \( -name 'geoip.dat' -o -name 'geosite.dat' -o -name 'xray' \) -delete || true
+find "${JNI_LIBS_DIR}" -type f \( -name 'geoip.dat' -o -name 'geosite.dat' -o -name 'xray' -o -name 'libxraycore.so' \) -delete || true
 
 copy_abi() {
   local abi="$1"
@@ -148,16 +147,11 @@ copy_abi() {
   echo "[OK] Copied ${src} -> ${dest}"
 }
 
-rm -rf "${JNI_LIBS_DIR}/x86_64"
 copy_abi arm64-v8a
-if [ -f "${ROOT_DIR}/assets/xray/android/x86_64/xray" ]; then
+if [ "${INCLUDE_X86_64}" = "1" ]; then
   copy_abi x86_64
-  echo "[OK] Included x86_64 runtime because the binary is present."
-elif [ "${INCLUDE_X86_64}" = "1" ]; then
-  echo "[WARN] ALPHAWET_INCLUDE_X86_64=1 was set, but assets/xray/android/x86_64/xray is missing."
-else
-  echo "[INFO] x86_64 runtime is not bundled because no binary was found under assets/xray/android/x86_64/."
+  echo "[OK] Included x86_64 runtime"
 fi
 
 echo "[OK] Android package detected as ${PACKAGE_NAME}"
-echo "[OK] JNI-backed AlphaWet runtime overlay applied"
+echo "[OK] AlphaWet native runtime overlay applied"

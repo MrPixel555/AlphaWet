@@ -24,17 +24,7 @@ class MainActivity : FlutterActivity() {
                 "ensureVpnPermission" -> ensureVpnPermission(result)
                 "isVpnPermissionGranted" -> result.success(isVpnPermissionGranted())
                 "validateConfig" -> executeAsync(result) { bridge.validateConfig(call) }
-                "startCore" -> executeAsync(result) {
-                    val payload = bridge.startCore(call)
-                    if (call.argument<Boolean>("enableDeviceVpn") == true && payload["success"] == true) {
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                moveTaskToBack(false)
-                            }
-                        }
-                    }
-                    payload
-                }
+                "startCore" -> executeAsync(result) { bridge.startCore(call) }
                 "stopCore" -> executeAsync(result) { bridge.stopCore(call) }
                 "pingProxy" -> executeAsync(result) { bridge.pingProxy(call) }
                 "getCoreStatus" -> executeAsync(result) { bridge.getCoreStatus() }

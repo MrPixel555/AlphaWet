@@ -28,28 +28,36 @@ class XrayCoreRuntimeBridge(private val context: Context) {
 
     fun startCore(call: MethodCall): Map<String, Any?> {
         val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
-        if (!bundle.enableDeviceVpn) {
-            if (XrayCoreRuntimeManager.isDeviceVpnMode()) {
-                requestVpnServiceStop()
-                waitForStop(timeoutMs = 4_000)
-            }
-            return XrayCoreRuntimeManager.start(bundle = bundle, tunFd = -1)
-        }
+        requestVpnServiceStop()
+        requestProxyServiceStop()
+        waitForStop(timeoutMs = 4_000)
 
-        val intent = Intent(context, AlphaWetVpnService::class.java).apply {
-            action = AlphaWetVpnService.ACTION_START
-            putExtra(RuntimeBundleFactory.EXTRA_CONFIG_ID, bundle.configId)
-            putExtra(RuntimeBundleFactory.EXTRA_DISPLAY_NAME, bundle.displayName)
-            putExtra(RuntimeBundleFactory.EXTRA_CONFIG_JSON, bundle.configFile.readText())
-            putExtra(RuntimeBundleFactory.EXTRA_HTTP_PORT, bundle.httpPort)
-            putExtra(RuntimeBundleFactory.EXTRA_SOCKS_PORT, bundle.socksPort)
-            putExtra(RuntimeBundleFactory.EXTRA_ENABLE_DEVICE_VPN, true)
+        val serviceIntent = if (bundle.enableDeviceVpn) {
+            Intent(context, AlphaWetVpnService::class.java).apply {
+                action = AlphaWetVpnService.ACTION_START
+                putExtra(RuntimeBundleFactory.EXTRA_CONFIG_ID, bundle.configId)
+                putExtra(RuntimeBundleFactory.EXTRA_DISPLAY_NAME, bundle.displayName)
+                putExtra(RuntimeBundleFactory.EXTRA_CONFIG_JSON, bundle.configFile.readText())
+                putExtra(RuntimeBundleFactory.EXTRA_HTTP_PORT, bundle.httpPort)
+                putExtra(RuntimeBundleFactory.EXTRA_SOCKS_PORT, bundle.socksPort)
+                putExtra(RuntimeBundleFactory.EXTRA_ENABLE_DEVICE_VPN, true)
+            }
+        } else {
+            Intent(context, AlphaWetProxyService::class.java).apply {
+                action = AlphaWetProxyService.ACTION_START
+                putExtra(RuntimeBundleFactory.EXTRA_CONFIG_ID, bundle.configId)
+                putExtra(RuntimeBundleFactory.EXTRA_DISPLAY_NAME, bundle.displayName)
+                putExtra(RuntimeBundleFactory.EXTRA_CONFIG_JSON, bundle.configFile.readText())
+                putExtra(RuntimeBundleFactory.EXTRA_HTTP_PORT, bundle.httpPort)
+                putExtra(RuntimeBundleFactory.EXTRA_SOCKS_PORT, bundle.socksPort)
+                putExtra(RuntimeBundleFactory.EXTRA_ENABLE_DEVICE_VPN, false)
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
+            context.startForegroundService(serviceIntent)
         } else {
-            context.startService(intent)
+            context.startService(serviceIntent)
         }
 
         val deadline = System.currentTimeMillis() + 8_000L
@@ -70,13 +78,17 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             "success" to false,
             "message" to (
                 lastStatus["message"] as? String
-                    ?: "Timed out while waiting for AlphaWet device tunnel to start."
+                    ?: if (bundle.enableDeviceVpn) {
+                        "Timed out while waiting for AlphaWet device tunnel to start."
+                    } else {
+                        "Timed out while waiting for AlphaWet local proxy to start."
+                    }
                 ),
             "configId" to bundle.configId,
             "displayName" to bundle.displayName,
             "httpPort" to bundle.httpPort,
             "socksPort" to bundle.socksPort,
-            "deviceVpnMode" to true,
+            "deviceVpnMode" to bundle.enableDeviceVpn,
             "logFilePath" to lastStatus["logFilePath"],
         )
     }
@@ -84,6 +96,7 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     fun stopCore(call: MethodCall): Map<String, Any?> {
         val configId = call.argument<String>("configId") ?: "unknown"
         requestVpnServiceStop()
+        requestProxyServiceStop()
         val stopped = waitForStop(timeoutMs = 2_500)
         return if (stopped) {
             XrayCoreRuntimeManager.stop(configId)
@@ -101,20 +114,25 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     fun pingProxy(call: MethodCall): Map<String, Any?> {
+        val url = "https://www.google.com/generate_204"
         val httpPort = call.argument<Int>("httpPort") ?: 10808
-        val url = call.argument<String>("url")?.trim().takeUnless { it.isNullOrEmpty() }
-            ?: "https://www.google.com/generate_204"
+        val socksPort = call.argument<Int>("socksPort") ?: 10809
         val configJson = call.argument<String>("configJson")?.trim().takeUnless { it.isNullOrEmpty() }
         val configId = call.argument<String>("configId")?.trim().takeUnless { it.isNullOrEmpty() }
             ?: "ping"
         val displayName = call.argument<String>("displayName")?.trim().takeUnless { it.isNullOrEmpty() }
             ?: configId
-        val targetHost = call.argument<String>("targetHost")?.trim().takeUnless { it.isNullOrEmpty() }
-        val targetPort = call.argument<Int>("targetPort")
-        val socksPort = call.argument<Int>("socksPort") ?: 10809
 
-        if (XrayCoreRuntimeManager.isActiveProxyPort(httpPort)) {
-            return XrayCoreRuntimeManager.pingProxy(httpPort = httpPort, url = url)
+        val activeStatus = XrayCoreRuntimeManager.status()
+        val activeConfigId = activeStatus["configId"] as? String
+        val activeHttpPort = activeStatus["httpPort"] as? Int
+        if (
+            activeStatus["state"] == "running" &&
+            activeStatus["success"] == true &&
+            activeConfigId == configId &&
+            activeHttpPort != null
+        ) {
+            return XrayCoreRuntimeManager.pingProxy(httpPort = activeHttpPort, url = url)
         }
 
         val packagedBinary = RuntimeBundleFactory.resolvePackagedBinaryOrNull(context)
@@ -132,26 +150,12 @@ class XrayCoreRuntimeBridge(private val context: Context) {
             return XrayCoreRuntimeManager.pingViaTransientRuntime(bundle = bundle, url = url)
         }
 
-        if (targetHost != null && targetPort != null) {
-            val fallbackReason = if (packagedBinary == null) {
-                "Packaged Xray runtime was not found, so a direct TCP reachability probe was used instead of a proxy-to-google test."
-            } else {
-                "Xray JSON was unavailable, so a direct TCP reachability probe was used instead of a proxy-to-google test."
-            }
-            return XrayCoreRuntimeManager.pingTargetDirect(
-                host = targetHost,
-                port = targetPort,
-                reason = fallbackReason,
-            )
-        }
-
         return mapOf(
             "success" to false,
-            "message" to when {
-                packagedBinary == null ->
-                    "Packaged Xray runtime was not found and no direct host/port fallback was available for ping."
-                else ->
-                    "Ping requires either a running core, a ready Xray config, or a host/port target."
+            "message" to if (packagedBinary == null) {
+                "Packaged Xray runtime was not found, so Google real-delay ping is unavailable."
+            } else {
+                "Ping requires a ready Xray config so AlphaWet can measure Google real-delay through that config."
             },
         )
     }
@@ -161,6 +165,13 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     private fun requestVpnServiceStop() {
         val intent = Intent(context, AlphaWetVpnService::class.java).apply {
             action = AlphaWetVpnService.ACTION_STOP
+        }
+        context.startService(intent)
+    }
+
+    private fun requestProxyServiceStop() {
+        val intent = Intent(context, AlphaWetProxyService::class.java).apply {
+            action = AlphaWetProxyService.ACTION_STOP
         }
         context.startService(intent)
     }
@@ -603,7 +614,22 @@ object XrayCoreRuntimeManager {
             )
         }
         try {
-            Thread.sleep(750)
+            val ready = waitForLoopbackListener(port = bundle.httpPort, timeoutMs = 5_000)
+            if (!ready) {
+                val outputTail = tailLog(bundle.logFile)
+                return mapOf(
+                    "success" to false,
+                    "message" to buildString {
+                        append("Timed out while preparing a transient Xray runtime for Google real-delay ping.")
+                        if (outputTail.isNotBlank()) {
+                            append('\n')
+                            append(outputTail)
+                        }
+                    },
+                    "latencyMs" to null,
+                    "logFilePath" to bundle.logFile.absolutePath,
+                )
+            }
             val result = pingProxy(httpPort = bundle.httpPort, url = url)
             return result + mapOf("logFilePath" to bundle.logFile.absolutePath)
         } finally {
@@ -616,24 +642,37 @@ object XrayCoreRuntimeManager {
         return try {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
             val connection = (URL(url).openConnection(proxy) as HttpURLConnection).apply {
-                connectTimeout = 4_000
-                readTimeout = 4_000
+                connectTimeout = 5_000
+                readTimeout = 5_000
                 requestMethod = "GET"
-                instanceFollowRedirects = true
+                instanceFollowRedirects = false
                 useCaches = false
+                setRequestProperty("Connection", "close")
             }
-            connection.inputStream.use { it.readBytes() }
+            connection.connect()
+            val responseCode = connection.responseCode
+            connection.inputStream?.close()
+            connection.errorStream?.close()
+            connection.disconnect()
             val latencyMs = ((System.nanoTime() - start) / 1_000_000L).toInt()
-            mapOf(
-                "success" to true,
-                "latencyMs" to latencyMs,
-                "message" to "Proxy latency to $url: ${latencyMs} ms",
-            )
+            if (responseCode in 200..399) {
+                mapOf(
+                    "success" to true,
+                    "latencyMs" to latencyMs,
+                    "message" to "Google real-delay through the config: ${latencyMs} ms",
+                )
+            } else {
+                mapOf(
+                    "success" to false,
+                    "latencyMs" to null,
+                    "message" to "Google real-delay ping failed with HTTP $responseCode.",
+                )
+            }
         } catch (error: Exception) {
             mapOf(
                 "success" to false,
                 "latencyMs" to null,
-                "message" to "Proxy ping failed: ${error.message ?: error.javaClass.simpleName}",
+                "message" to "Google real-delay ping failed: ${error.message ?: error.javaClass.simpleName}",
             )
         }
     }
@@ -663,7 +702,28 @@ object XrayCoreRuntimeManager {
         activePid = null
         sessionId = null
         activeConfigId = null
+        currentHttpPort = 10808
+        currentSocksPort = 10809
         currentDeviceVpnMode = false
+    }
+
+    private fun waitForLoopbackListener(port: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val pid = activePid
+            if (pid != null && !XrayNativeBridge.isRunning(pid)) {
+                return false
+            }
+            try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", port), 250)
+                }
+                return true
+            } catch (_: Exception) {
+                Thread.sleep(100)
+            }
+        }
+        return false
     }
 
     private fun tailLog(file: File, maxChars: Int = 4_000): String {

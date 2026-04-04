@@ -65,6 +65,7 @@ text = path.read_text()
 permissions = [
     'android.permission.INTERNET',
     'android.permission.FOREGROUND_SERVICE',
+    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
     'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
 ]
 for permission in permissions:
@@ -76,9 +77,21 @@ for permission in permissions:
 if 'android:extractNativeLibs=' not in text:
     text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
 
-service_name = '.AlphaWetVpnService'
+if 'AlphaWetProxyService' not in text:
+    proxy_service_block = '''
+        <service
+            android:name=".AlphaWetProxyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user-started AlphaWet local proxy tunnel alive while the app is backgrounded." />
+        </service>
+'''
+    text = text.replace('</application>', proxy_service_block + '    </application>', 1)
+
 if 'AlphaWetVpnService' not in text:
-    service_block = '''
+    vpn_service_block = '''
         <service
             android:name=".AlphaWetVpnService"
             android:exported="false"
@@ -89,7 +102,7 @@ if 'AlphaWetVpnService' not in text:
             </intent-filter>
         </service>
 '''
-    text = text.replace('</application>', service_block + '    </application>', 1)
+    text = text.replace('</application>', vpn_service_block + '    </application>', 1)
 
 path.write_text(text)
 PY

@@ -83,18 +83,22 @@ class RuntimeBridge {
     String? displayName,
     String? configJson,
   }) async {
-    final String? normalizedConfigJson = _buildGooglePingConfigJson(
-      configJson: configJson,
-      httpPort: httpPort,
-      socksPort: socksPort,
-    );
-
     try {
+      final List<int> pingPorts = await _allocateTransientPingPorts(
+        preferredHttpPort: httpPort,
+        preferredSocksPort: socksPort,
+      );
+      final String? normalizedConfigJson = _buildGooglePingConfigJson(
+        configJson: configJson,
+        httpPort: pingPorts[0],
+        socksPort: pingPorts[1],
+      );
+
       return await _channel.invokeMapMethod<Object?, Object?>(
         'pingProxy',
         <String, Object?>{
-          'httpPort': httpPort,
-          'socksPort': socksPort,
+          'httpPort': pingPorts[0],
+          'socksPort': pingPorts[1],
           'url': url,
           'configId': configId,
           'displayName': displayName,
@@ -111,7 +115,48 @@ class RuntimeBridge {
         'success': false,
         'message': error.message ?? 'Ping is unavailable right now.',
       };
+    } on SocketException catch (error) {
+      return <Object?, Object?>{
+        'success': false,
+        'message': error.message,
+      };
     }
+  }
+
+  static Future<List<int>> _allocateTransientPingPorts({
+    required int preferredHttpPort,
+    required int preferredSocksPort,
+  }) async {
+    Future<int> reserve(int preferred, {int? avoid}) async {
+      final List<int> candidates = <int>[
+        if (preferred > 0 && preferred <= 65535) preferred,
+        0,
+      ];
+      for (final int candidate in candidates) {
+        ServerSocket? socket;
+        try {
+          socket = await ServerSocket.bind(
+            InternetAddress.loopbackIPv4,
+            candidate,
+            shared: false,
+          );
+          final int port = socket.port;
+          if (avoid != null && port == avoid) {
+            await socket.close();
+            continue;
+          }
+          await socket.close();
+          return port;
+        } catch (_) {
+          await socket?.close();
+        }
+      }
+      throw const SocketException('Failed to reserve transient loopback port for ping.');
+    }
+
+    final int http = await reserve(preferredHttpPort);
+    final int socks = await reserve(preferredSocksPort, avoid: http);
+    return <int>[http, socks];
   }
 
   static String? _buildGooglePingConfigJson({

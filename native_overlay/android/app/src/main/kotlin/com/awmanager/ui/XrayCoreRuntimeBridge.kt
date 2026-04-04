@@ -255,7 +255,6 @@ object XrayCoreRuntimeManager {
             bundle.assetDir.absolutePath,
             bundle.workDir.absolutePath,
             bundle.logFile.absolutePath,
-            -1,
         )
         val outputTail = tailLog(bundle.logFile)
         return if (exitCode == 0) {

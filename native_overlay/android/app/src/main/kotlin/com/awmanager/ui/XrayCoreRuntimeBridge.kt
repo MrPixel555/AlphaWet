@@ -255,6 +255,7 @@ object XrayCoreRuntimeManager {
             bundle.assetDir.absolutePath,
             bundle.workDir.absolutePath,
             bundle.logFile.absolutePath,
+            -1,
         )
         val outputTail = tailLog(bundle.logFile)
         return if (exitCode == 0) {
@@ -324,6 +325,7 @@ object XrayCoreRuntimeManager {
             bundle.assetDir.absolutePath,
             bundle.workDir.absolutePath,
             bundle.logFile.absolutePath,
+            -1,
         )
         if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
             val outputTail = tailLog(bundle.logFile)
@@ -443,6 +445,7 @@ object XrayCoreRuntimeManager {
             bundle.assetDir.absolutePath,
             bundle.workDir.absolutePath,
             bundle.logFile.absolutePath,
+            -1,
         )
         if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
             val outputTail = tailLog(bundle.logFile)

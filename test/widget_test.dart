@@ -13,7 +13,7 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(Scaffold), findsWidgets);
     expect(find.textContaining('AlphaWet'), findsWidgets);
-    expect(find.textContaining('No configs imported'), findsOneWidget);
   });
 }

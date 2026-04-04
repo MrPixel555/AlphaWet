@@ -132,7 +132,7 @@ class RuntimeBridge {
         'success': success,
         'latencyMs': elapsedMs,
         'message': success
-            ? 'Proxy path to google.com is reachable in ${elapsedMs} ms (HTTP $code).'
+            ? 'Proxy path to google.com is reachable in $elapsedMs ms (HTTP $code).'
             : 'Proxy reached the remote endpoint, but google.com returned HTTP $code.',
       };
     } finally {
@@ -157,7 +157,7 @@ class RuntimeBridge {
       return <Object?, Object?>{
         'success': true,
         'latencyMs': elapsedMs,
-        'message': 'TCP reachability to $host:$port succeeded in ${elapsedMs} ms.',
+        'message': 'TCP reachability to $host:$port succeeded in $elapsedMs ms.',
       };
     } catch (error) {
       return <Object?, Object?>{

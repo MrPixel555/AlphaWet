@@ -150,11 +150,13 @@ copy_abi() {
 
 rm -rf "${JNI_LIBS_DIR}/x86_64"
 copy_abi arm64-v8a
-if [ "${INCLUDE_X86_64}" = "1" ]; then
+if [ -f "${ROOT_DIR}/assets/xray/android/x86_64/xray" ]; then
   copy_abi x86_64
-  echo "[OK] Included x86_64 runtime because ALPHAWET_INCLUDE_X86_64=1"
+  echo "[OK] Included x86_64 runtime because the binary is present."
+elif [ "${INCLUDE_X86_64}" = "1" ]; then
+  echo "[WARN] ALPHAWET_INCLUDE_X86_64=1 was set, but assets/xray/android/x86_64/xray is missing."
 else
-  echo "[INFO] Skipping x86_64 runtime to keep APK size down. Set ALPHAWET_INCLUDE_X86_64=1 if you need emulator support."
+  echo "[INFO] x86_64 runtime is not bundled because no binary was found under assets/xray/android/x86_64/."
 fi
 
 echo "[OK] Android package detected as ${PACKAGE_NAME}"

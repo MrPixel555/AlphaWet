@@ -69,21 +69,21 @@ jobs:
             echo "[OK] Optional dart-defines were composed from GitHub Secrets."
           fi
 
-      - name: Build arm64 release APK
+      - name: Build universal release APK
         working-directory: ${{ env.BUILD_ROOT }}
-        run: flutter build apk --release --split-per-abi --target-platform android-arm64 ${DART_DEFINE_ARGS}
+        run: flutter build apk --release ${DART_DEFINE_ARGS}
 
       - name: Collect build outputs
         run: |
           mkdir -p dist
-          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" \
-            dist/alphawet-arm64-release.apk
+          cp "$BUILD_ROOT/build/app/outputs/flutter-apk/app-release.apk" \
+            dist/alphawet-universal-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aw-manager-ui-arm64-apk
-          path: dist/alphawet-arm64-release.apk
+          name: alphawet-universal-apk
+          path: dist/alphawet-universal-release.apk
           if-no-files-found: error
 
       - name: Create trimmed failure snapshot

@@ -198,11 +198,13 @@ class AlphaWetVpnService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("AlphaWet is running")
             .setContentText("Full-device tunnel is active for the selected profile.")
-            .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
-            .setOngoing(true)
+            .setSmallIcon(android.R.drawable.presence_online)
             .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
             .build()
+            .apply {
+                flags = flags or Notification.FLAG_ONGOING_EVENT
+            }
     }
 
     private fun createNotificationChannel() {

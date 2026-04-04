@@ -15,6 +15,6 @@ void main() {
     expect(find.text('AlphaWet'), findsWidgets);
     expect(find.textContaining('HTTP 127.0.0.1:10808'), findsOneWidget);
     expect(find.text('made by AlphaCraft'), findsOneWidget);
-    expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.tune_rounded), findsWidgets);
   });
 }

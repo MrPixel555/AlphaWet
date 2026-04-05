@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build AlphaWet Android APK
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 45
 
     env:
-      BUILD_ROOT: /tmp/alpha_wet
+      BUILD_ROOT: /tmp/alphawet
       AW_INCLUDE_X86_64: '1'
 
     steps:
@@ -39,7 +39,148 @@ jobs:
           java -version
 
       - name: Prepare Android project for CI
+        env:
+          AW_EXPECTED_SIGNING_CERT_SHA256: ${{ secrets.AW_EXPECTED_SIGNING_CERT_SHA256 }}
         run: bash tool/ci_prepare_android_project.sh "$GITHUB_WORKSPACE" "$BUILD_ROOT"
+
+      - name: Restore release keystore
+        shell: bash
+        env:
+          AW_ANDROID_KEYSTORE_BASE64: ${{ secrets.AW_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$AW_ANDROID_KEYSTORE_BASE64"
+          mkdir -p "$RUNNER_TEMP/alphawet-signing"
+          echo "$AW_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/alphawet-signing/release.jks"
+
+      - name: Write key.properties
+        shell: bash
+        env:
+          AW_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AW_ANDROID_KEYSTORE_PASSWORD }}
+          AW_ANDROID_KEY_PASSWORD: ${{ secrets.AW_ANDROID_KEY_PASSWORD }}
+          AW_ANDROID_KEY_ALIAS: ${{ secrets.AW_ANDROID_KEY_ALIAS }}
+        run: |
+          test -n "$AW_ANDROID_KEYSTORE_PASSWORD"
+          test -n "$AW_ANDROID_KEY_PASSWORD"
+          test -n "$AW_ANDROID_KEY_ALIAS"
+          cat > "$BUILD_ROOT/android/key.properties" <<EOF
+          storePassword=${AW_ANDROID_KEYSTORE_PASSWORD}
+          keyPassword=${AW_ANDROID_KEY_PASSWORD}
+          keyAlias=${AW_ANDROID_KEY_ALIAS}
+          storeFile=${RUNNER_TEMP}/alphawet-signing/release.jks
+          EOF
+
+      - name: Wire release signing into generated Android project
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          app_dir = Path(os.environ["BUILD_ROOT"]) / "android" / "app"
+          kts = app_dir / "build.gradle.kts"
+          groovy = app_dir / "build.gradle"
+
+          def patch_kts(path: Path):
+              text = path.read_text()
+
+              if 'val keystoreProperties = Properties()' not in text:
+                  marker = 'plugins {'
+                  inject = '''import java.util.Properties
+          import java.io.FileInputStream
+
+          val keystoreProperties = Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+          }
+
+          plugins {'''
+                  text = text.replace(marker, inject, 1)
+
+              if 'create("release")' not in text:
+                  text = text.replace(
+                      'buildTypes {',
+                      '''signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                      storePassword = keystoreProperties["storePassword"] as String
+                  }
+              }
+
+              buildTypes {''',
+                      1
+                  )
+
+              text = text.replace(
+                  'signingConfig = signingConfigs.getByName("debug")',
+                  'signingConfig = signingConfigs.getByName("release")'
+              )
+
+              if 'signingConfig = signingConfigs.getByName("release")' not in text:
+                  text = text.replace(
+                      'release {',
+                      'release {\n            signingConfig = signingConfigs.getByName("release")',
+                      1
+                  )
+
+              path.write_text(text)
+
+          def patch_groovy(path: Path):
+              text = path.read_text()
+
+              if "def keystoreProperties = new Properties()" not in text:
+                  marker = 'plugins {'
+                  inject = """import java.util.Properties
+          import java.io.FileInputStream
+
+          def keystoreProperties = new Properties()
+          def keystorePropertiesFile = rootProject.file('key.properties')
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+
+          plugins {"""
+                  text = text.replace(marker, inject, 1)
+
+              if "signingConfigs {" not in text or "release {" not in text:
+                  text = text.replace(
+                      'buildTypes {',
+                      """signingConfigs {
+                  release {
+                      keyAlias = keystoreProperties['keyAlias']
+                      keyPassword = keystoreProperties['keyPassword']
+                      storeFile = keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+                      storePassword = keystoreProperties['storePassword']
+                  }
+              }
+
+              buildTypes {""",
+                      1
+                  )
+
+              text = text.replace(
+                  'signingConfig = signingConfigs.debug',
+                  'signingConfig = signingConfigs.release'
+              )
+
+              if 'signingConfig = signingConfigs.release' not in text:
+                  text = text.replace(
+                      'release {',
+                      'release {\n            signingConfig = signingConfigs.release',
+                      1
+                  )
+
+              path.write_text(text)
+
+          if kts.exists():
+              patch_kts(kts)
+          elif groovy.exists():
+              patch_groovy(groovy)
+          else:
+              raise SystemExit("No app build.gradle(.kts) found in generated Android project")
+          PY
 
       - name: Install dependencies
         working-directory: ${{ env.BUILD_ROOT }}
@@ -53,21 +194,21 @@ jobs:
         working-directory: ${{ env.BUILD_ROOT }}
         run: flutter analyze
 
-      - name: Compose optional dart-define flags
-        env:
-          AW_TRANSPORT_KEY_BASE64: ${{ secrets.AW_TRANSPORT_KEY_BASE64 }}
-          AW_ED25519_PUBLIC_KEY_BASE64: ${{ secrets.AW_ED25519_PUBLIC_KEY_BASE64 }}
-          AW_ALLOW_LEGACY_PLAINTEXT_IMPORT: ${{ secrets.AW_ALLOW_LEGACY_PLAINTEXT_IMPORT }}
-        run: |
-          args=()
-          [ -n "${AW_TRANSPORT_KEY_BASE64:-}" ] && args+=("--dart-define=AW_TRANSPORT_KEY_BASE64=${AW_TRANSPORT_KEY_BASE64}")
-          [ -n "${AW_ED25519_PUBLIC_KEY_BASE64:-}" ] && args+=("--dart-define=AW_ED25519_PUBLIC_KEY_BASE64=${AW_ED25519_PUBLIC_KEY_BASE64}")
-          [ -n "${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT:-}" ] && args+=("--dart-define=AW_ALLOW_LEGACY_PLAINTEXT_IMPORT=${AW_ALLOW_LEGACY_PLAINTEXT_IMPORT}")
-          printf 'DART_DEFINE_ARGS=%s\n' "${args[*]}" >> "$GITHUB_ENV"
-
       - name: Build universal release APK
         working-directory: ${{ env.BUILD_ROOT }}
-        run: flutter build apk --release ${DART_DEFINE_ARGS}
+        run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
+
+      - name: Verify release certificate pin
+        shell: bash
+        env:
+          AW_EXPECTED_SIGNING_CERT_SHA256: ${{ secrets.AW_EXPECTED_SIGNING_CERT_SHA256 }}
+        run: |
+          APKSIGNER="$(find "${ANDROID_HOME}" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          ACTUAL_CERT_SHA256="$("$APKSIGNER" verify --print-certs "$BUILD_ROOT/build/app/outputs/flutter-apk/app-release.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':\r\n ')"
+          echo "Actual cert SHA256: $ACTUAL_CERT_SHA256"
+          test -n "$ACTUAL_CERT_SHA256"
+          test "$ACTUAL_CERT_SHA256" = "$AW_EXPECTED_SIGNING_CERT_SHA256"
 
       - name: Collect build outputs
         run: |

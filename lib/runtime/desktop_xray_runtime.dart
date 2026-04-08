@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -374,7 +372,7 @@ class DesktopXrayRuntimeManager {
         return <Object?, Object?>{
           'success': true,
           'latencyMs': latencyMs,
-          'message': 'Proxy ping succeeded in ${latencyMs} ms.',
+          'message': 'Proxy ping succeeded in $latencyMs ms.',
         };
       }
 

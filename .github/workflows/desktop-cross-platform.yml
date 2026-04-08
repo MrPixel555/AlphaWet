@@ -3,6 +3,9 @@ name: Build AlphaWet Desktop
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-desktop:
     name: Build ${{ matrix.target }} desktop bundle
@@ -53,6 +56,8 @@ jobs:
 
       - name: Download desktop Xray runtime assets
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           PYTHON_BIN=python3
           command -v python3 >/dev/null 2>&1 || PYTHON_BIN=python

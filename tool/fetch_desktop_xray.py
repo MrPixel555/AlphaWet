@@ -5,10 +5,12 @@ import os
 import pathlib
 import re
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 
 API_URL = 'https://api.github.com/repos/XTLS/Xray-core/releases/latest'
+LATEST_DOWNLOAD_BASE_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download'
 
 EXACT_ASSET_NAMES = {
     'windows': 'Xray-windows-64.zip',
@@ -21,20 +23,34 @@ BINARY_NAMES = {
 }
 
 
+def build_headers(extra_headers=None):
+    headers = {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'AlphaWet-GitHub-Actions',
+    }
+
+    github_token = os.environ.get('XRAY_GITHUB_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    if github_token:
+        headers['Authorization'] = f'Bearer {github_token}'
+        headers['X-GitHub-Api-Version'] = '2022-11-28'
+
+    if extra_headers:
+        headers.update(extra_headers)
+
+    return headers
+
+
 def fetch_json(url: str):
-    request = urllib.request.Request(
-        url,
-        headers={
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': 'AlphaWet-GitHub-Actions',
-        },
-    )
+    request = urllib.request.Request(url, headers=build_headers())
     with urllib.request.urlopen(request) as response:
         return json.load(response)
 
 
 def download_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={'User-Agent': 'AlphaWet-GitHub-Actions'})
+    request = urllib.request.Request(
+        url,
+        headers=build_headers({'Accept': 'application/octet-stream'}),
+    )
     with urllib.request.urlopen(request) as response:
         return response.read()
 
@@ -70,6 +86,31 @@ def extract_optional(zip_bytes: bytes, member_basename: str):
     return None
 
 
+def download_release_zip(platform_key: str) -> bytes:
+    asset_name = EXACT_ASSET_NAMES[platform_key]
+    direct_url = f'{LATEST_DOWNLOAD_BASE_URL}/{asset_name}'
+
+    try:
+        print(f'[INFO] Downloading {asset_name} from latest/download ...')
+        return download_bytes(direct_url)
+    except urllib.error.HTTPError as error:
+        if error.code not in (403, 404):
+            raise
+        print(
+            f'[WARN] latest/download returned HTTP {error.code} for {asset_name}; '
+            'falling back to GitHub API release discovery.'
+        )
+
+    release = fetch_json(API_URL)
+    assets = release.get('assets', [])
+    if not assets:
+        raise SystemExit('Latest Xray release did not expose downloadable assets.')
+
+    asset = select_asset(assets, platform_key)
+    print(f'[INFO] Downloading {asset["name"]} from GitHub API metadata ...')
+    return download_bytes(asset['browser_download_url'])
+
+
 def main() -> int:
     repo_root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
     assets_root = repo_root / 'assets' / 'xray'
@@ -77,15 +118,8 @@ def main() -> int:
     (assets_root / 'linux').mkdir(parents=True, exist_ok=True)
     (assets_root / 'common').mkdir(parents=True, exist_ok=True)
 
-    release = fetch_json(API_URL)
-    assets = release.get('assets', [])
-    if not assets:
-        raise SystemExit('Latest Xray release did not expose downloadable assets.')
-
     for platform_key in ('windows', 'linux'):
-        asset = select_asset(assets, platform_key)
-        print(f'[INFO] Downloading {asset["name"]} ...')
-        zip_bytes = download_bytes(asset['browser_download_url'])
+        zip_bytes = download_release_zip(platform_key)
         binary_name = BINARY_NAMES[platform_key]
         target_binary = assets_root / platform_key / binary_name
         target_binary.write_bytes(extract_from_zip(zip_bytes, binary_name))

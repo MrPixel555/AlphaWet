@@ -1,1 +1,1 @@
-git add -A && git commit -m "update" && git push origin main
+git add --sparse -A && git commit -m "update" && git push origin main

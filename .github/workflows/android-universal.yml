@@ -1,12 +1,7 @@
 name: Build AlphaWet Android APK
 
 on:
-  push:
-    branches: ['main']
-  pull_request:
-    branches: ['main']
   workflow_dispatch:
-
 jobs:
   build-android:
     runs-on: ubuntu-latest

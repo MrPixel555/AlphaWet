@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'desktop_xray_runtime.dart';
+
 class RuntimeBridge {
   RuntimeBridge._();
 
@@ -25,6 +27,9 @@ class RuntimeBridge {
   }
 
   static Future<Map<Object?, Object?>?> getCoreStatus() async {
+    if (Platform.isWindows || Platform.isLinux) {
+      return DesktopXrayRuntimeManager.instance.currentStatus();
+    }
     if (!Platform.isAndroid) {
       return <Object?, Object?>{
         'success': true,
@@ -83,6 +88,46 @@ class RuntimeBridge {
     String? displayName,
     String? configJson,
   }) async {
+    if (Platform.isWindows || Platform.isLinux) {
+      if (configJson == null || configJson.trim().isEmpty) {
+        return <Object?, Object?>{
+          'success': false,
+          'message': 'Ping is unavailable because the desktop Xray config is empty.',
+        };
+      }
+
+      try {
+        final List<int> pingPorts = await _allocateTransientPingPorts(
+          preferredHttpPort: httpPort,
+          preferredSocksPort: socksPort,
+        );
+        final String? normalizedConfigJson = _buildGooglePingConfigJson(
+          configJson: configJson,
+          httpPort: pingPorts[0],
+          socksPort: pingPorts[1],
+        );
+
+        if (normalizedConfigJson == null) {
+          return <Object?, Object?>{
+            'success': false,
+            'message': 'Ping is unavailable because the Xray config could not be normalized.',
+          };
+        }
+
+        return DesktopXrayRuntimeManager.instance.pingWithTemporaryRuntime(
+          configJson: normalizedConfigJson,
+          httpPort: pingPorts[0],
+          socksPort: pingPorts[1],
+          url: url,
+        );
+      } on SocketException catch (error) {
+        return <Object?, Object?>{
+          'success': false,
+          'message': error.message,
+        };
+      }
+    }
+
     try {
       final List<int> pingPorts = await _allocateTransientPingPorts(
         preferredHttpPort: httpPort,

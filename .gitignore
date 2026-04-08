@@ -21,3 +21,9 @@ Thumbs.db
 **/android/local.properties
 **/android/key.properties
 **/android/app/upload-keystore.jks
+
+# Downloaded desktop Xray runtime assets
+assets/xray/windows/xray.exe
+assets/xray/linux/xray
+assets/xray/common/geoip.dat
+assets/xray/common/geosite.dat

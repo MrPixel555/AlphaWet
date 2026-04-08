@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -75,7 +76,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoadingRuntimeSettings = true;
   bool _configsLoaded = false;
   bool _isRestoringRuntimeState = false;
-  RuntimeSettings _runtimeSettings = RuntimeSettings.defaults;
+  RuntimeSettings _runtimeSettings =
+      Platform.isAndroid ? RuntimeSettings.defaults : const RuntimeSettings(mode: RuntimeMode.proxy);
 
   @override
   void initState() {
@@ -110,9 +112,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final RuntimeSettings loaded = await _runtimeSettingsStore.load();
       final bool permissionGranted = await RuntimeBridge.isVpnPermissionGranted();
-      final RuntimeSettings merged = loaded.copyWith(
+      RuntimeSettings merged = loaded.copyWith(
         vpnPermissionGranted: permissionGranted || loaded.vpnPermissionGranted,
       );
+      if (!Platform.isAndroid && merged.enableDeviceVpn) {
+        merged = merged.copyWith(mode: RuntimeMode.proxy, vpnPermissionGranted: false);
+      }
       if (!mounted) {
         return;
       }
@@ -130,7 +135,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       setState(() {
-        _runtimeSettings = RuntimeSettings.defaults;
+        _runtimeSettings = Platform.isAndroid
+            ? RuntimeSettings.defaults
+            : const RuntimeSettings(mode: RuntimeMode.proxy);
         _isLoadingRuntimeSettings = false;
       });
       await _restoreRuntimeStateFromNative();
@@ -613,7 +620,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     RuntimeSettings nextSettings = updated;
-    if (nextSettings.enableDeviceVpn) {
+    if (!Platform.isAndroid) {
+      nextSettings = nextSettings.copyWith(mode: RuntimeMode.proxy, vpnPermissionGranted: false);
+    } else if (nextSettings.enableDeviceVpn) {
       final bool granted = await RuntimeBridge.ensureVpnPermission();
       nextSettings = nextSettings.copyWith(
         mode: granted ? RuntimeMode.vpn : RuntimeMode.proxy,
@@ -1437,7 +1446,9 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Choose exactly one mode. VPN is the default. Proxy mode unlocks the local HTTP and SOCKS ports below.',
+            Platform.isAndroid
+                ? 'Choose exactly one mode. VPN is the default. Proxy mode unlocks the local HTTP and SOCKS ports below.'
+                : 'Desktop builds keep the same UI, but the runtime works in Proxy mode only. HTTP and SOCKS ports stay configurable below.',
             style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
@@ -1457,8 +1468,9 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 10),
-                SegmentedButton<RuntimeMode>(
-                  segments: const <ButtonSegment<RuntimeMode>>[
+                if (Platform.isAndroid)
+                  SegmentedButton<RuntimeMode>(
+                    segments: const <ButtonSegment<RuntimeMode>>[
                     ButtonSegment<RuntimeMode>(
                       value: RuntimeMode.vpn,
                       label: Text('VPN'),
@@ -1480,9 +1492,11 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  proxyMode
-                      ? 'Proxy mode starts the local listeners and uses the ports below.'
-                      : 'VPN mode starts the Android VPN tunnel and still keeps the local listeners available for diagnostics and status checks.',
+                  Platform.isAndroid
+                      ? (proxyMode
+                          ? 'Proxy mode starts the local listeners and uses the ports below.'
+                          : 'VPN mode starts the Android VPN tunnel and still keeps the local listeners available for diagnostics and status checks.')
+                      : 'Desktop builds use the local Xray proxy runtime. VPN mode remains available on Android builds only.',
                   style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ],

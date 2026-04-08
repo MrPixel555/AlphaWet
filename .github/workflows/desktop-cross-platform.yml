@@ -1,0 +1,119 @@
+name: Build AlphaWet Desktop
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+jobs:
+  build-desktop:
+    name: Build ${{ matrix.target }} desktop bundle
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+            artifact_name: alphawet-windows-x64
+          - os: ubuntu-latest
+            target: linux
+            artifact_name: alphawet-linux-x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop build dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          flutter --version
+          dart --version
+          python3 --version || python --version
+
+      - name: Generate missing desktop project scaffolding
+        shell: bash
+        run: |
+          flutter create \
+            --platforms=${{ matrix.target }} \
+            --project-name alpha_wet \
+            --org com.alphacraft \
+            .
+
+      - name: Download desktop Xray runtime assets
+        shell: bash
+        run: |
+          PYTHON_BIN=python3
+          command -v python3 >/dev/null 2>&1 || PYTHON_BIN=python
+          "$PYTHON_BIN" tool/fetch_desktop_xray.py "$GITHUB_WORKSPACE"
+
+      - name: Install Dart and Flutter dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Build desktop bundle
+        run: flutter build ${{ matrix.target }} --release
+
+      - name: Package desktop artifact
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ARTIFACT_NAME: ${{ matrix.artifact_name }}
+        run: |
+          PYTHON_BIN=python3
+          command -v python3 >/dev/null 2>&1 || PYTHON_BIN=python
+          "$PYTHON_BIN" - <<'PY'
+          import os
+          import pathlib
+          import tarfile
+          import zipfile
+
+          target = os.environ['TARGET']
+          artifact_name = os.environ['ARTIFACT_NAME']
+          dist_dir = pathlib.Path('dist')
+          dist_dir.mkdir(parents=True, exist_ok=True)
+
+          if target == 'windows':
+              source_dir = pathlib.Path('build/windows/x64/runner/Release')
+              archive_path = dist_dir / f'{artifact_name}.zip'
+              with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                  for path in source_dir.rglob('*'):
+                      if path.is_file():
+                          archive.write(path, pathlib.Path(artifact_name) / path.relative_to(source_dir))
+          elif target == 'linux':
+              source_dir = pathlib.Path('build/linux/x64/release/bundle')
+              archive_path = dist_dir / f'{artifact_name}.tar.gz'
+              with tarfile.open(archive_path, 'w:gz') as archive:
+                  archive.add(source_dir, arcname=artifact_name)
+          else:
+              raise SystemExit(f'Unsupported packaging target: {target}')
+
+          print(f'[OK] Packaged {archive_path}')
+          PY
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
+          if-no-files-found: error

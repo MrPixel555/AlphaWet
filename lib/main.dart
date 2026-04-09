@@ -26,14 +26,7 @@ void main() {
 }
 
 class AwManagerApp extends StatelessWidget {
-  const AwManagerApp({
-    super.key,
-    this.disableStartupSideEffects = false,
-    this.enableWindowsPortraitFrame = true,
-  });
-
-  final bool disableStartupSideEffects;
-  final bool enableWindowsPortraitFrame;
+  const AwManagerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +39,7 @@ class AwManagerApp extends StatelessWidget {
         if (child == null) {
           return const SizedBox.shrink();
         }
-        if (!Platform.isWindows || !enableWindowsPortraitFrame) {
+        if (!Platform.isWindows) {
           return child;
         }
         return _WindowsPortraitFrame(child: child);
@@ -64,15 +57,13 @@ class AwManagerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: HomeScreen(disableStartupSideEffects: disableStartupSideEffects),
+      home: const HomeScreen(),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.disableStartupSideEffects = false});
-
-  final bool disableStartupSideEffects;
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -108,13 +99,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _runtimeSettingsStore = RuntimeSettingsStore();
     _configStore = ConfigStore();
     _vpnEngine = createVpnEngine(logger: _logger);
-
-    if (widget.disableStartupSideEffects) {
-      _configsLoaded = true;
-      _isLoadingRuntimeSettings = false;
-      return;
-    }
-
     _loadPersistedConfigs();
     _loadRuntimeSettings();
     _runtimeWatchdog = Timer.periodic(const Duration(seconds: 8), (_) => _pollRuntimeHealth());
@@ -1078,62 +1062,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(width: 8),
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Material(
-          color: theme.colorScheme.surface,
-          elevation: 3,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: LayoutBuilder(
-              builder: (BuildContext context, BoxConstraints constraints) {
-                final bool compact = constraints.maxWidth < 360;
-
-                Widget previewButton() => FilledButton.tonalIcon(
-                  onPressed: _previewLogs,
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  label: const Text('Preview Logs'),
-                );
-
-                Widget exportButton() => FilledButton.icon(
-                  onPressed: _isExportingLogs ? null : _exportLogs,
-                  icon: _isExportingLogs
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_alt_rounded),
-                  label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
-                );
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (compact)
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          SizedBox(width: double.infinity, child: previewButton()),
-                          const SizedBox(height: 8),
-                          SizedBox(width: double.infinity, child: exportButton()),
-                        ],
-                      )
-                    else
-                      Row(
-                        children: <Widget>[
-                          Expanded(child: previewButton()),
-                          const SizedBox(width: 12),
-                          Expanded(child: exportButton()),
-                        ],
-                      ),
-                    const SizedBox(height: 8),
-                    const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
-                  ],
-                );
-              },
+      bottomNavigationBar: BottomAppBar(
+        height: 108,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: _previewLogs,
+                    icon: const Icon(Icons.receipt_long_outlined),
+                    label: const Text('Preview Logs'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _isExportingLogs ? null : _exportLogs,
+                    icon: _isExportingLogs
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_alt_rounded),
+                    label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
+                  ),
+                ),
+              ],
             ),
-          ),
+            const SizedBox(height: 8),
+            const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
+          ],
         ),
       ),
       body: SafeArea(
@@ -1638,34 +1599,25 @@ class _AlphaWetTitle extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
 
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              Icons.water_drop_rounded,
-              color: colors.onPrimaryContainer,
-              size: 20,
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: colors.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
           ),
-          const SizedBox(width: 10),
-          Text(
-            'AlphaWet',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium,
+          child: Icon(
+            Icons.water_drop_rounded,
+            color: colors.onPrimaryContainer,
+            size: 20,
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 10),
+        const Text('AlphaWet'),
+      ],
     );
   }
 }

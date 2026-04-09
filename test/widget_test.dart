@@ -23,5 +23,7 @@ void main() {
     expect(find.byType(Scaffold), findsWidgets);
     expect(find.textContaining('AlphaWet'), findsWidgets);
 
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
   });
 }

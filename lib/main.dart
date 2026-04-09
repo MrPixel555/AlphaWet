@@ -428,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ? (message.isNotEmpty
                   ? message
                   : (deviceVpnMode
-                      ? 'AlphaWet ${_deviceTunnelLabel} session is already active.'
+                      ? 'AlphaWet $_deviceTunnelLabel session is already active.'
                       : 'AlphaWet proxy session is already active.'))
               : (item.isXrayReady
                   ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
@@ -688,7 +688,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       SnackBar(
         content: Text(
           nextSettings.enableDeviceVpn
-              ? 'Settings saved. Mode is ${_deviceTunnelLabel}.'
+              ? 'Settings saved. Mode is $_deviceTunnelLabel.'
               : 'Settings saved. ${nextSettings.proxySummary}',
         ),
       ),
@@ -794,7 +794,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       refreshedCurrent.copyWith(
         connectionState: VpnConnectionState.validating,
         engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Validating generated Xray config for ${_deviceTunnelLabel} mode...'
+            ? 'Validating generated Xray config for $_deviceTunnelLabel mode...'
             : 'Validating generated Xray config for Proxy mode...',
       ),
     );
@@ -821,7 +821,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         isEnabled: true,
         connectionState: VpnConnectionState.connecting,
         engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Starting AlphaWet in ${_deviceTunnelLabel} mode...'
+            ? 'Starting AlphaWet in $_deviceTunnelLabel mode...'
             : 'Starting AlphaWet in Proxy mode...',
         lastValidatedAt: DateTime.now(),
       ),
@@ -1193,7 +1193,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         _isLoadingRuntimeSettings
                                             ? 'Loading runtime settings...'
                                             : _runtimeSettings.enableDeviceVpn
-                                            ? 'Current mode: ${_deviceTunnelLabel}'
+                                            ? 'Current mode: $_deviceTunnelLabel'
                                             : 'Current listener profile: ${_runtimeSettings.proxySummary}',
                                         style: theme.textTheme.bodyMedium?.copyWith(
                                           color: colors.onSurfaceVariant,

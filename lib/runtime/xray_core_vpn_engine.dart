@@ -11,7 +11,7 @@ import 'vpn_engine.dart';
 class XrayCoreVpnEngine implements VpnEngine {
   XrayCoreVpnEngine({AppLogger? logger}) : _logger = logger ?? AppLogger.instance;
 
-  static const MethodChannel _channel = MethodChannel('aw_manager_ui/xray_core');
+  static const MethodChannel _channel = MethodChannel('alphawet/xray_core');
   static const String _tag = 'XrayCoreVpnEngine';
   final AppLogger _logger;
 

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/config_entry.dart';
@@ -116,7 +118,7 @@ class ConfigCard extends StatelessWidget {
                 ),
                 _StatusPill(
                   icon: runtimeSettings.enableDeviceVpn ? Icons.vpn_lock_rounded : Icons.lan_rounded,
-                  label: runtimeSettings.modeLabel,
+                  label: runtimeSettings.modeLabelForPlatform(preferTunLabel: _preferTunLabel),
                 ),
                 _StatusPill(
                   icon: Icons.speed_rounded,
@@ -151,7 +153,7 @@ class ConfigCard extends StatelessWidget {
                     ),
                     _DetailLine(
                       label: 'Mode',
-                      value: runtimeSettings.modeLabel,
+                      value: runtimeSettings.modeLabelForPlatform(preferTunLabel: _preferTunLabel),
                     ),
                     if (_hasText(entry.engineMessage))
                       _DetailLine(
@@ -226,7 +228,9 @@ class ConfigCard extends StatelessWidget {
     switch (entry.connectionState) {
       case VpnConnectionState.connected:
         return runtimeSettings.enableDeviceVpn
-            ? 'Connected • whole device tunnel requested'
+            ? (_preferTunLabel
+                ? 'Connected • Windows TUN requested'
+                : 'Connected • whole device tunnel requested')
             : 'Connected • local proxy ready';
       case VpnConnectionState.connecting:
         return 'Starting connection...';
@@ -244,6 +248,8 @@ class ConfigCard extends StatelessWidget {
         return 'Not connected';
     }
   }
+
+  bool get _preferTunLabel => Platform.isWindows;
 
   bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
 

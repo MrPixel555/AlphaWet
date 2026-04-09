@@ -1,4 +1,4 @@
-import 'package:alpha_wet/main.dart';
+import 'package:alphawet/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

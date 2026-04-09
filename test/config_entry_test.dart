@@ -1,6 +1,6 @@
-import 'package:alpha_wet/models/aw_profile_models.dart';
-import 'package:alpha_wet/models/config_entry.dart';
-import 'package:alpha_wet/models/vpn_runtime_models.dart';
+import 'package:alphawet/models/aw_profile_models.dart';
+import 'package:alphawet/models/config_entry.dart';
+import 'package:alphawet/models/vpn_runtime_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../models/config_entry.dart';
 import '../models/runtime_settings.dart';
 import '../models/vpn_runtime_models.dart';
@@ -29,7 +31,9 @@ class DesktopXrayVpnEngine implements VpnEngine {
         state: VpnConnectionState.ready,
         success: true,
         message: runtimeSettings.enableDeviceVpn
-            ? 'Desktop runtime validated. Desktop builds keep the same UI but run in proxy mode only.'
+            ? (Platform.isWindows
+                ? 'Desktop runtime validated in TUN mode. ${runtimeSettings.proxySummary}'
+                : 'Desktop runtime validated in VPN mode. ${runtimeSettings.proxySummary}')
             : 'Desktop runtime validated. ${runtimeSettings.proxySummary}',
       );
     } on Object catch (error, stackTrace) {

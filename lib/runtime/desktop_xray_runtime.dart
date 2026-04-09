@@ -26,6 +26,7 @@ class DesktopXrayRuntimeManager {
   String? _sessionId;
   String? _lastMessage;
   DateTime? _startedAt;
+  bool _activeDeviceTunnelMode = false;
 
   bool get isSupportedDesktop => Platform.isWindows || Platform.isLinux;
 
@@ -37,7 +38,7 @@ class DesktopXrayRuntimeManager {
         'success': false,
         'state': 'failed',
         'message': 'Desktop Xray runtime is unsupported on this platform.',
-        'deviceVpnMode': false,
+        'deviceVpnMode': _activeDeviceTunnelMode,
       };
     }
 
@@ -46,7 +47,7 @@ class DesktopXrayRuntimeManager {
         'success': true,
         'state': 'idle',
         'message': _lastMessage ?? 'Desktop Xray runtime is idle.',
-        'deviceVpnMode': false,
+        'deviceVpnMode': _activeDeviceTunnelMode,
       };
     }
 
@@ -57,7 +58,7 @@ class DesktopXrayRuntimeManager {
       'configId': _activeConfigId,
       'displayName': _activeDisplayName,
       'sessionId': _sessionId,
-      'deviceVpnMode': false,
+      'deviceVpnMode': _activeDeviceTunnelMode,
       'startedAt': _startedAt?.toIso8601String(),
     };
   }
@@ -71,8 +72,8 @@ class DesktopXrayRuntimeManager {
     await runtimeDirectory.create(recursive: true);
 
     final String assetKey = Platform.isWindows
-        ? 'assets/xray/windows/xray.exe'
-        : 'assets/xray/linux/xray';
+        ? 'assets/xray/desktop/xray.exe'
+        : 'assets/xray/desktop/xray';
     final String binaryName = Platform.isWindows ? 'xray.exe' : 'xray';
     final File binaryFile = File('${runtimeDirectory.path}${Platform.pathSeparator}$binaryName');
 
@@ -238,8 +239,11 @@ class DesktopXrayRuntimeManager {
       _activeDisplayName = displayName;
       _sessionId = sessionId;
       _startedAt = DateTime.now();
+      _activeDeviceTunnelMode = runtimeSettings.enableDeviceVpn;
       _lastMessage = runtimeSettings.enableDeviceVpn
-          ? 'Desktop runtime started. Desktop builds use local proxy mode even when VPN mode is selected.'
+          ? (Platform.isWindows
+              ? 'Desktop runtime started in TUN mode. ${runtimeSettings.proxySummary}'
+              : 'Desktop runtime started in VPN mode. ${runtimeSettings.proxySummary}')
           : 'Desktop runtime started. ${runtimeSettings.proxySummary}';
 
       _stdoutSubscription = process.stdout
@@ -271,7 +275,9 @@ class DesktopXrayRuntimeManager {
       return DesktopRuntimeStartResult(
         success: true,
         message: runtimeSettings.enableDeviceVpn
-            ? 'Desktop runtime started. Desktop builds keep the same UI but run in proxy mode only.'
+            ? (Platform.isWindows
+                ? 'Desktop runtime started in TUN mode. ${runtimeSettings.proxySummary}'
+                : 'Desktop runtime started in VPN mode. ${runtimeSettings.proxySummary}')
             : 'Desktop runtime started. ${runtimeSettings.proxySummary}',
         sessionId: sessionId,
       );
@@ -315,7 +321,7 @@ class DesktopXrayRuntimeManager {
     } on FlutterError catch (error, stackTrace) {
       _logger.error(_tag, 'Missing required desktop asset: $assetKey', error: error, stackTrace: stackTrace);
       throw StateError(
-        'Required runtime asset "$assetKey" is missing. Run the GitHub Actions desktop asset fetch step before building.',
+        'Required runtime asset "$assetKey" is missing. Refresh the desktop runtimes and activate the target bundle before building.',
       );
     }
   }
@@ -413,6 +419,7 @@ class DesktopXrayRuntimeManager {
     _activeDisplayName = null;
     _sessionId = null;
     _startedAt = null;
+    _activeDeviceTunnelMode = false;
     _lastMessage = message;
 
     if (configFile != null) {

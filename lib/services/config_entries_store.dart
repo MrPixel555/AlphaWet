@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'opaque_windows_storage.dart';
+
 import '../models/aw_profile_models.dart';
 import '../models/config_entry.dart';
 
@@ -9,6 +11,21 @@ class ConfigEntriesStore {
   static const String _configsKey = 'alphawet.config_entries';
 
   Future<List<StoredConfigEntry>> load() async {
+    if (OpaqueWindowsStorage.instance.isAvailable) {
+      final String? raw = await OpaqueWindowsStorage.instance.readText(_configsKey);
+      if (raw == null || raw.trim().isEmpty) {
+        return const <StoredConfigEntry>[];
+      }
+      final Object? decoded = jsonDecode(raw);
+      if (decoded is! List<Object?>) {
+        return const <StoredConfigEntry>[];
+      }
+      return decoded
+          .whereType<String>()
+          .map((String item) => StoredConfigEntry.fromJson(jsonDecode(item) as Map<String, dynamic>))
+          .toList(growable: false);
+    }
+
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final List<String> rawEntries = prefs.getStringList(_configsKey) ?? const <String>[];
     return rawEntries
@@ -17,10 +34,18 @@ class ConfigEntriesStore {
   }
 
   Future<void> save(List<ConfigEntry> entries) async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
     final List<String> payload = entries
         .map((ConfigEntry entry) => jsonEncode(StoredConfigEntry.fromRuntimeEntry(entry).toJson()))
         .toList(growable: false);
+
+    if (OpaqueWindowsStorage.instance.isAvailable) {
+      await OpaqueWindowsStorage.instance.writeText(_configsKey, jsonEncode(payload));
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_configsKey);
+      return;
+    }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_configsKey, payload);
   }
 }

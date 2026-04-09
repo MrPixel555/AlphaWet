@@ -24,6 +24,8 @@ Thumbs.db
 
 # Downloaded desktop Xray runtime assets
 assets/xray/windows/xray.exe
+assets/xray/desktop/xray.exe
 assets/xray/linux/xray
+assets/xray/desktop/xray
 assets/xray/common/geoip.dat
 assets/xray/common/geosite.dat

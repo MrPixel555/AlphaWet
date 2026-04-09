@@ -8,7 +8,7 @@ import 'desktop_xray_runtime.dart';
 class RuntimeBridge {
   RuntimeBridge._();
 
-  static const MethodChannel _channel = MethodChannel('aw_manager_ui/xray_core');
+  static const MethodChannel _channel = MethodChannel('alphawet/xray_core');
 
   static Future<bool> ensureVpnPermission() async {
     if (!Platform.isAndroid) {

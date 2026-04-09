@@ -1,6 +1,6 @@
 #!/system/bin/sh
 
-PKG="com.alphacraft.alpha_wet"
+PKG="com.alphawet.alphawet"
 WAIT_SECS=30
 OUT="/sdcard/alpha_watch_$(date +%Y%m%d_%H%M%S)"
 

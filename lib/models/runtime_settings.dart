@@ -43,7 +43,14 @@ class RuntimeSettings {
 
   String get proxySummary => 'HTTP 127.0.0.1:$httpPort • SOCKS 127.0.0.1:$socksPort';
 
-  String get modeLabel => enableDeviceVpn ? 'VPN' : 'Proxy';
+  String modeLabelForPlatform({bool preferTunLabel = false}) {
+    if (!enableDeviceVpn) {
+      return 'Proxy';
+    }
+    return preferTunLabel ? 'TUN' : 'VPN';
+  }
+
+  String get modeLabel => modeLabelForPlatform();
 
   String? validate() {
     if (!_isValidPort(httpPort)) {

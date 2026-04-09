@@ -4,6 +4,8 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -111,11 +113,21 @@ def download_release_zip(platform_key: str) -> bytes:
     return download_bytes(asset['browser_download_url'])
 
 
+def activate_target(repo_root: pathlib.Path, platform_key: str) -> None:
+    script = repo_root / 'tool' / 'select_desktop_runtime.py'
+    subprocess.run([sys.executable, str(script), platform_key, str(repo_root)], check=True)
+
+
 def main() -> int:
     repo_root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
+    target_platform = sys.argv[2].lower() if len(sys.argv) > 2 else os.environ.get('ALPHAWET_DESKTOP_TARGET', '').lower()
+    if target_platform and target_platform not in BINARY_NAMES:
+        raise SystemExit('Target platform must be windows or linux.')
+
     assets_root = repo_root / 'assets' / 'xray'
     (assets_root / 'windows').mkdir(parents=True, exist_ok=True)
     (assets_root / 'linux').mkdir(parents=True, exist_ok=True)
+    (assets_root / 'desktop').mkdir(parents=True, exist_ok=True)
     (assets_root / 'common').mkdir(parents=True, exist_ok=True)
 
     for platform_key in ('windows', 'linux'):
@@ -133,6 +145,11 @@ def main() -> int:
         if geosite_bytes is not None:
             (assets_root / 'common' / 'geosite.dat').write_bytes(geosite_bytes)
             print('[OK] Wrote assets/xray/common/geosite.dat')
+
+    if target_platform:
+        activate_target(repo_root, target_platform)
+    else:
+        print('[INFO] Source runtimes were refreshed. Activate one target with tool/select_desktop_runtime.py.')
 
     return 0
 

@@ -1,5 +1,5 @@
-name: alpha_wet
-description: Flutter UI for importing .aw configs, building Xray JSON, and launching Android Xray-core.
+name: alphawet
+description: AlphaWet Flutter UI for importing .aw configs, building Xray JSON, and launching Xray runtimes.
 publish_to: 'none'
 version: 2.3.8+238
 
@@ -23,5 +23,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/xray/common/
-    - assets/xray/windows/
-    - assets/xray/linux/
+    - assets/xray/desktop/

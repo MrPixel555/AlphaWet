@@ -35,6 +35,15 @@ class AwManagerApp extends StatelessWidget {
     return MaterialApp(
       title: 'AlphaWet',
       debugShowCheckedModeBanner: false,
+      builder: (BuildContext context, Widget? child) {
+        if (child == null) {
+          return const SizedBox.shrink();
+        }
+        if (!Platform.isWindows) {
+          return child;
+        }
+        return _WindowsPortraitFrame(child: child);
+      },
       themeMode: ThemeMode.system,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: seed),
@@ -76,8 +85,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoadingRuntimeSettings = true;
   bool _configsLoaded = false;
   bool _isRestoringRuntimeState = false;
-  RuntimeSettings _runtimeSettings =
-      Platform.isAndroid ? RuntimeSettings.defaults : const RuntimeSettings(mode: RuntimeMode.proxy);
+  RuntimeSettings _runtimeSettings = Platform.isAndroid || Platform.isWindows
+      ? RuntimeSettings.defaults
+      : const RuntimeSettings(mode: RuntimeMode.proxy);
 
   @override
   void initState() {
@@ -108,6 +118,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  bool get _preferTunLabel => Platform.isWindows;
+
+  String get _deviceTunnelLabel => _preferTunLabel ? 'TUN' : 'VPN';
+
   Future<void> _loadRuntimeSettings() async {
     try {
       final RuntimeSettings loaded = await _runtimeSettingsStore.load();
@@ -115,7 +129,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       RuntimeSettings merged = loaded.copyWith(
         vpnPermissionGranted: permissionGranted || loaded.vpnPermissionGranted,
       );
-      if (!Platform.isAndroid && merged.enableDeviceVpn) {
+      if (Platform.isLinux && merged.enableDeviceVpn) {
         merged = merged.copyWith(mode: RuntimeMode.proxy, vpnPermissionGranted: false);
       }
       if (!mounted) {
@@ -135,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       setState(() {
-        _runtimeSettings = Platform.isAndroid
+        _runtimeSettings = Platform.isAndroid || Platform.isWindows
             ? RuntimeSettings.defaults
             : const RuntimeSettings(mode: RuntimeMode.proxy);
         _isLoadingRuntimeSettings = false;
@@ -398,7 +412,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ? (message.isNotEmpty
                   ? message
                   : (deviceVpnMode
-                      ? 'AlphaWet VPN session is already active.'
+                      ? 'AlphaWet ${_deviceTunnelLabel} session is already active.'
                       : 'AlphaWet proxy session is already active.'))
               : (item.isXrayReady
                   ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
@@ -620,9 +634,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     RuntimeSettings nextSettings = updated;
-    if (!Platform.isAndroid) {
+    if (Platform.isLinux) {
       nextSettings = nextSettings.copyWith(mode: RuntimeMode.proxy, vpnPermissionGranted: false);
-    } else if (nextSettings.enableDeviceVpn) {
+    } else if (Platform.isWindows && nextSettings.enableDeviceVpn) {
+      nextSettings = nextSettings.copyWith(mode: RuntimeMode.vpn, vpnPermissionGranted: true);
+    } else if (Platform.isAndroid && nextSettings.enableDeviceVpn) {
       final bool granted = await RuntimeBridge.ensureVpnPermission();
       nextSettings = nextSettings.copyWith(
         mode: granted ? RuntimeMode.vpn : RuntimeMode.proxy,
@@ -656,7 +672,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       SnackBar(
         content: Text(
           nextSettings.enableDeviceVpn
-              ? 'Settings saved. Mode is VPN.'
+              ? 'Settings saved. Mode is ${_deviceTunnelLabel}.'
               : 'Settings saved. ${nextSettings.proxySummary}',
         ),
       ),
@@ -701,7 +717,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (_runtimeSettings.enableDeviceVpn && !_runtimeSettings.vpnPermissionGranted) {
+    if (Platform.isAndroid && _runtimeSettings.enableDeviceVpn && !_runtimeSettings.vpnPermissionGranted) {
       final bool granted = await RuntimeBridge.ensureVpnPermission();
       if (!mounted) {
         return;
@@ -762,7 +778,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       refreshedCurrent.copyWith(
         connectionState: VpnConnectionState.validating,
         engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Validating generated Xray config for VPN mode...'
+            ? 'Validating generated Xray config for ${_deviceTunnelLabel} mode...'
             : 'Validating generated Xray config for Proxy mode...',
       ),
     );
@@ -789,7 +805,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         isEnabled: true,
         connectionState: VpnConnectionState.connecting,
         engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Starting AlphaWet in VPN mode...'
+            ? 'Starting AlphaWet in ${_deviceTunnelLabel} mode...'
             : 'Starting AlphaWet in Proxy mode...',
         lastValidatedAt: DateTime.now(),
       ),
@@ -1025,7 +1041,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final ColorScheme colors = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AlphaWet'),
+        title: const _AlphaWetTitle(),
         centerTitle: false,
         actions: <Widget>[
           IconButton(
@@ -1077,7 +1093,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ],
             ),
             const SizedBox(height: 8),
-            const Text('made by AlphaCraft', style: TextStyle(fontSize: 12)),
+            const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
           ],
         ),
       ),
@@ -1138,7 +1154,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         _isLoadingRuntimeSettings
                                             ? 'Loading runtime settings...'
                                             : _runtimeSettings.enableDeviceVpn
-                                            ? 'Current mode: VPN'
+                                            ? 'Current mode: ${_deviceTunnelLabel}'
                                             : 'Current listener profile: ${_runtimeSettings.proxySummary}',
                                         style: theme.textTheme.bodyMedium?.copyWith(
                                           color: colors.onSurfaceVariant,
@@ -1172,7 +1188,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 _MetricChip(
                                   icon: Icons.vpn_lock_outlined,
                                   label: 'Tunnel',
-                                  value: _runtimeSettings.modeLabel,
+                                  value: _runtimeSettings.modeLabelForPlatform(preferTunLabel: _preferTunLabel),
                                 ),
                               ],
                             ),
@@ -1187,7 +1203,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                                 child: Text(
                                   _runtimeSettings.enableDeviceVpn
-                                      ? 'VPN mode is active. AlphaWet requests an Android VPN session and also keeps the local HTTP and SOCKS listeners available for diagnostics such as Google real-delay ping.'
+                                      ? (_preferTunLabel
+                                          ? 'TUN mode is active. AlphaWet starts the Windows TUN profile and also keeps the local HTTP and SOCKS listeners available for diagnostics.'
+                                          : 'VPN mode is active. AlphaWet requests an Android VPN session and also keeps the local HTTP and SOCKS listeners available for diagnostics such as Google real-delay ping.')
                                       : 'Proxy mode is active. AlphaWet keeps the local HTTP and SOCKS listeners on the ports shown above.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: colors.onSecondaryContainer,
@@ -1448,7 +1466,9 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
           Text(
             Platform.isAndroid
                 ? 'Choose exactly one mode. VPN is the default. Proxy mode unlocks the local HTTP and SOCKS ports below.'
-                : 'Desktop builds keep the same UI, but the runtime works in Proxy mode only. HTTP and SOCKS ports stay configurable below.',
+                : Platform.isWindows
+                    ? 'Choose exactly one mode. TUN matches the phone layout and keeps the same local HTTP and SOCKS listeners available below for diagnostics.'
+                    : 'Desktop builds keep the same UI, but the runtime works in Proxy mode only. HTTP and SOCKS ports stay configurable below.',
             style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
@@ -1468,20 +1488,20 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 10),
-                if (Platform.isAndroid)
+                if (Platform.isAndroid || Platform.isWindows)
                   SegmentedButton<RuntimeMode>(
-                    segments: const <ButtonSegment<RuntimeMode>>[
-                    ButtonSegment<RuntimeMode>(
-                      value: RuntimeMode.vpn,
-                      label: Text('VPN'),
-                      icon: Icon(Icons.vpn_lock_rounded),
-                    ),
-                    ButtonSegment<RuntimeMode>(
-                      value: RuntimeMode.proxy,
-                      label: Text('Proxy'),
-                      icon: Icon(Icons.lan_rounded),
-                    ),
-                  ],
+                    segments: <ButtonSegment<RuntimeMode>>[
+                      ButtonSegment<RuntimeMode>(
+                        value: RuntimeMode.vpn,
+                        label: Text(Platform.isWindows ? 'TUN' : 'VPN'),
+                        icon: const Icon(Icons.vpn_lock_rounded),
+                      ),
+                      const ButtonSegment<RuntimeMode>(
+                        value: RuntimeMode.proxy,
+                        label: Text('Proxy'),
+                        icon: Icon(Icons.lan_rounded),
+                      ),
+                    ],
                   selected: <RuntimeMode>{_mode},
                   showSelectedIcon: false,
                   onSelectionChanged: (Set<RuntimeMode> selection) {
@@ -1496,7 +1516,11 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                       ? (proxyMode
                           ? 'Proxy mode starts the local listeners and uses the ports below.'
                           : 'VPN mode starts the Android VPN tunnel and still keeps the local listeners available for diagnostics and status checks.')
-                      : 'Desktop builds use the local Xray proxy runtime. VPN mode remains available on Android builds only.',
+                      : Platform.isWindows
+                          ? (proxyMode
+                              ? 'Proxy mode starts the local listeners and uses the ports below.'
+                              : 'TUN mode starts the Windows TUN profile and still keeps the local listeners available for diagnostics and status checks.')
+                          : 'Desktop builds use the local Xray proxy runtime. VPN mode remains available on Android and Windows builds only.',
                   style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ],
@@ -1561,6 +1585,74 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+class _AlphaWetTitle extends StatelessWidget {
+  const _AlphaWetTitle();
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colors = theme.colorScheme;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: colors.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            Icons.water_drop_rounded,
+            color: colors.onPrimaryContainer,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Text('AlphaWet'),
+      ],
+    );
+  }
+}
+
+class _WindowsPortraitFrame extends StatelessWidget {
+  const _WindowsPortraitFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color background = Theme.of(context).scaffoldBackgroundColor;
+
+    return ColoredBox(
+      color: background,
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double maxHeight = constraints.maxHeight;
+          final double maxWidth = constraints.maxWidth;
+          final double portraitWidth = maxHeight * (9 / 16);
+          final double portraitHeight = maxWidth * (16 / 9);
+          final double width = portraitWidth <= maxWidth ? portraitWidth : maxWidth;
+          final double height = portraitWidth <= maxWidth ? maxHeight : portraitHeight;
+
+          return Center(
+            child: SizedBox(
+              width: width,
+              height: height <= maxHeight ? height : maxHeight,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: child,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

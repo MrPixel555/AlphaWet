@@ -18,7 +18,7 @@ import java.util.UUID
 
 class XrayCoreRuntimeBridge(private val context: Context) {
     companion object {
-        const val CHANNEL = "aw_manager_ui/xray_core"
+        const val CHANNEL = "alphawet/xray_core"
     }
 
     fun validateConfig(call: MethodCall): Map<String, Any?> {

@@ -1,8 +1,8 @@
 import 'dart:convert';
-
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/aw_profile_models.dart';
+import 'opaque_windows_storage.dart';
 
 class PersistedConfigRecord {
   const PersistedConfigRecord({
@@ -28,8 +28,7 @@ class ConfigStore {
   static const String _configsKey = 'configs.persisted.v1';
 
   Future<List<PersistedConfigRecord>> load() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final String? raw = prefs.getString(_configsKey);
+    final String? raw = await _readRaw();
     if (raw == null || raw.trim().isEmpty) {
       return const <PersistedConfigRecord>[];
     }
@@ -50,10 +49,39 @@ class ConfigStore {
   }
 
   Future<void> save(List<PersistedConfigRecord> records) async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
     final List<Map<String, dynamic>> payload =
         records.map(_recordToJson).toList(growable: false);
-    await prefs.setString(_configsKey, jsonEncode(payload));
+    final String encoded = jsonEncode(payload);
+
+    if (OpaqueWindowsStorage.instance.isAvailable) {
+      await OpaqueWindowsStorage.instance.writeText(_configsKey, encoded);
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_configsKey);
+      return;
+    }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_configsKey, encoded);
+  }
+
+  Future<String?> _readRaw() async {
+    if (OpaqueWindowsStorage.instance.isAvailable) {
+      final String? sealed = await OpaqueWindowsStorage.instance.readText(_configsKey);
+      if (sealed != null && sealed.trim().isNotEmpty) {
+        return sealed;
+      }
+
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? legacy = prefs.getString(_configsKey);
+      if (legacy != null && legacy.trim().isNotEmpty) {
+        await OpaqueWindowsStorage.instance.writeText(_configsKey, legacy);
+        await prefs.remove(_configsKey);
+      }
+      return legacy;
+    }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_configsKey);
   }
 
   PersistedConfigRecord _recordFromJson(Map<String, dynamic> json) {

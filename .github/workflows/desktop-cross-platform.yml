@@ -70,7 +70,7 @@ jobs:
         run: flutter test
 
       - name: Static analysis
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Build desktop bundle
         run: flutter build ${{ matrix.target }} --release

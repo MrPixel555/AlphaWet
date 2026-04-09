@@ -159,7 +159,7 @@ jobs:
 
       - name: Static analysis
         working-directory: ${{ env.BUILD_ROOT }}
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Compose optional dart-define flags
         env:

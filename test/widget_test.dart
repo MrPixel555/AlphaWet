@@ -8,6 +8,10 @@ void main() {
 
   testWidgets('shows initial app shell', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    tester.view.physicalSize = const Size(430, 932);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(const AwManagerApp(disableStartupSideEffects: true));
     await tester.pump();

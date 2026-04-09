@@ -1050,6 +1050,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
+    final double screenWidth = MediaQuery.sizeOf(context).width;
+    final bool compactBottomActions = screenWidth < 360;
+    final double bottomBarHeight = compactBottomActions ? 152 : 92;
+
     return Scaffold(
       appBar: AppBar(
         title: const _AlphaWetTitle(),
@@ -1074,6 +1078,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
       bottomNavigationBar: BottomAppBar(
+        height: bottomBarHeight,
         child: SafeArea(
           top: false,
           child: Padding(
@@ -1105,6 +1110,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   children: <Widget>[
                     if (compact)
                       Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           SizedBox(width: double.infinity, child: previewButton()),
                           const SizedBox(height: 8),

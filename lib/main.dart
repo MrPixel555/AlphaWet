@@ -26,9 +26,14 @@ void main() {
 }
 
 class AwManagerApp extends StatelessWidget {
-  const AwManagerApp({super.key, this.disableStartupSideEffects = false});
+  const AwManagerApp({
+    super.key,
+    this.disableStartupSideEffects = false,
+    this.enableWindowsPortraitFrame = true,
+  });
 
   final bool disableStartupSideEffects;
+  final bool enableWindowsPortraitFrame;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +46,7 @@ class AwManagerApp extends StatelessWidget {
         if (child == null) {
           return const SizedBox.shrink();
         }
-        if (!Platform.isWindows) {
+        if (!Platform.isWindows || !enableWindowsPortraitFrame) {
           return child;
         }
         return _WindowsPortraitFrame(child: child);
@@ -1077,10 +1082,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(width: 8),
         ],
       ),
-      bottomNavigationBar: BottomAppBar(
-        height: bottomBarHeight,
-        child: SafeArea(
-          top: false,
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Material(
+          color: theme.colorScheme.surface,
+          elevation: 3,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: LayoutBuilder(

@@ -1,27 +1,43 @@
 from pathlib import Path
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 
-TRUST_INFO_BLOCK = '''  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+TRUST_INFO_BLOCK = '''  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
-      <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
 '''
 
-
 REQUESTED_EXECUTION_LEVEL_RE = re.compile(
     r'(<requestedExecutionLevel\b[^>]*\blevel\s*=\s*)(["\'])([^"\']*)(\2)([^>]*?/?>)',
     flags=re.IGNORECASE | re.DOTALL,
 )
+REQUESTED_PRIVILEGES_OPEN_RE = re.compile(r'(<requestedPrivileges\b[^>]*>)', flags=re.IGNORECASE)
+SECURITY_OPEN_RE = re.compile(r'(<security\b[^>]*>)', flags=re.IGNORECASE)
+TRUST_INFO_OPEN_RE = re.compile(r'(<trustInfo\b[^>]*>)', flags=re.IGNORECASE)
+ASSEMBLY_OPEN_RE = re.compile(r'(<assembly\b[^>]*>)', flags=re.IGNORECASE | re.DOTALL)
 
 
-SECURITY_CLOSE_RE = re.compile(r'(</security\s*>)', flags=re.IGNORECASE)
-ASSEMBLY_CLOSE_RE = re.compile(r'(</assembly\s*>)', flags=re.IGNORECASE)
-
+REQUESTED_EXECUTION_LEVEL_ONLY = (
+    '        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />\n'
+)
+REQUESTED_PRIVILEGES_BLOCK = (
+    '      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">\n'
+    '        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />\n'
+    '      </requestedPrivileges>\n'
+)
+SECURITY_BLOCK = (
+    '    <security>\n'
+    '      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">\n'
+    '        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />\n'
+    '      </requestedPrivileges>\n'
+    '    </security>\n'
+)
 
 
 def resolve_manifest_path(argv: list[str]) -> Path:
@@ -49,22 +65,52 @@ def replace_requested_execution_level(xml_text: str) -> tuple[str, bool]:
 
 
 
-def inject_requested_privileges(xml_text: str) -> tuple[str, str]:
-    requested_privileges = (
-        '      <requestedPrivileges>\n'
-        '        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>\n'
-        '      </requestedPrivileges>\n'
-    )
+def insert_after_first(pattern: re.Pattern[str], xml_text: str, block: str, reason: str) -> tuple[str, str] | None:
+    match = pattern.search(xml_text)
+    if not match:
+        return None
+    insert_at = match.end(1)
+    updated = xml_text[:insert_at] + '\n' + block + xml_text[insert_at:]
+    return updated, reason
 
-    if SECURITY_CLOSE_RE.search(xml_text):
-        updated = SECURITY_CLOSE_RE.sub(requested_privileges + r'\1', xml_text, count=1)
-        return updated, 'Inserted requestedPrivileges inside existing <security> block.'
 
-    if ASSEMBLY_CLOSE_RE.search(xml_text):
-        updated = ASSEMBLY_CLOSE_RE.sub(TRUST_INFO_BLOCK + r'\1', xml_text, count=1)
-        return updated, 'Inserted new <trustInfo> block before </assembly>.'
+
+def ensure_trust_info(xml_text: str) -> tuple[str, str]:
+    for pattern, block, reason in (
+        (
+            REQUESTED_PRIVILEGES_OPEN_RE,
+            REQUESTED_EXECUTION_LEVEL_ONLY,
+            'Inserted requestedExecutionLevel inside existing <requestedPrivileges> block.',
+        ),
+        (
+            SECURITY_OPEN_RE,
+            REQUESTED_PRIVILEGES_BLOCK,
+            'Inserted requestedPrivileges inside existing <security> block.',
+        ),
+        (
+            TRUST_INFO_OPEN_RE,
+            SECURITY_BLOCK,
+            'Inserted security/requestedPrivileges inside existing <trustInfo> block.',
+        ),
+        (
+            ASSEMBLY_OPEN_RE,
+            TRUST_INFO_BLOCK,
+            'Inserted canonical <trustInfo> block after <assembly>.',
+        ),
+    ):
+        result = insert_after_first(pattern, xml_text, block, reason)
+        if result is not None:
+            return result
 
     raise SystemExit('Could not find a safe insertion point in the Windows manifest.')
+
+
+
+def validate_xml(xml_text: str) -> None:
+    try:
+        ET.fromstring(xml_text)
+    except ET.ParseError as error:
+        raise SystemExit(f'Patched Windows manifest is not valid XML: {error}') from error
 
 
 
@@ -80,11 +126,13 @@ def main() -> int:
 
     updated, replaced = replace_requested_execution_level(original)
     if replaced:
+        validate_xml(updated)
         manifest_path.write_text(updated, encoding='utf-8')
         print(f'[OK] Updated requestedExecutionLevel in Windows manifest: {manifest_path}')
         return 0
 
-    updated, reason = inject_requested_privileges(original)
+    updated, reason = ensure_trust_info(original)
+    validate_xml(updated)
     manifest_path.write_text(updated, encoding='utf-8')
     print(f'[OK] Updated Windows manifest: {manifest_path} ({reason})')
     return 0

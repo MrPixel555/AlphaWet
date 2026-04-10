@@ -28,7 +28,6 @@ class DesktopXrayRuntimeManager {
   DateTime? _startedAt;
   bool _activeDeviceTunnelMode = false;
   int? _windowsTunInterfaceIndex;
-  int? _windowsPrimaryInterfaceIndex;
   String? _windowsPrimaryGateway;
   final Set<String> _windowsTunBypassAddresses = <String>{};
 
@@ -509,8 +508,6 @@ class DesktopXrayRuntimeManager {
           'MASK',
           '255.255.255.255',
           primaryRoute.nextHop,
-          'IF',
-          '${primaryRoute.interfaceIndex}',
         ],
       );
       await _runWindowsRoute(
@@ -520,8 +517,6 @@ class DesktopXrayRuntimeManager {
           'MASK',
           '255.255.255.255',
           primaryRoute.nextHop,
-          'IF',
-          '${primaryRoute.interfaceIndex}',
           'METRIC',
           '1',
         ],
@@ -530,7 +525,6 @@ class DesktopXrayRuntimeManager {
     }
 
     _windowsTunInterfaceIndex = tunInterfaceIndex;
-    _windowsPrimaryInterfaceIndex = primaryRoute.interfaceIndex;
     _windowsPrimaryGateway = primaryRoute.nextHop;
 
     _logger.info(
@@ -551,9 +545,8 @@ class DesktopXrayRuntimeManager {
       );
     }
 
-    final int? primaryInterfaceIndex = _windowsPrimaryInterfaceIndex;
     final String? primaryGateway = _windowsPrimaryGateway;
-    if (primaryInterfaceIndex != null && primaryGateway != null) {
+    if (primaryGateway != null) {
       for (final String address in _windowsTunBypassAddresses) {
         await _runWindowsRouteDelete(
           <String>[
@@ -562,15 +555,12 @@ class DesktopXrayRuntimeManager {
             'MASK',
             '255.255.255.255',
             primaryGateway,
-            'IF',
-            '$primaryInterfaceIndex',
           ],
         );
       }
     }
 
     _windowsTunInterfaceIndex = null;
-    _windowsPrimaryInterfaceIndex = null;
     _windowsPrimaryGateway = null;
     _windowsTunBypassAddresses.clear();
   }
@@ -661,157 +651,143 @@ class DesktopXrayRuntimeManager {
   }
 
   Future<_WindowsRouteInfo> _readWindowsPrimaryRoute() async {
-    const String primaryRouteScript = r'''$ErrorActionPreference = 'Stop'
+    const String cimRouteScript = r'''$ErrorActionPreference = 'Stop'
+$route = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_IP4RouteTable -ErrorAction Stop |
+  Where-Object {
+    $_.Destination -eq '0.0.0.0' -and
+    $_.Mask -eq '0.0.0.0' -and
+    $_.NextHop -ne '0.0.0.0' -and
+    $_.NextHop -ne $null
+  } |
+  Sort-Object Metric1 |
+  Select-Object -First 1 InterfaceIndex, NextHop
 
-function Emit-RouteLine($route) {
-  if ($null -eq $route) {
-    return $false
-  }
-
-  $interfaceIndex = $route.InterfaceIndex
-  if ($null -eq $interfaceIndex -and $null -ne $route.ifIndex) {
-    $interfaceIndex = $route.ifIndex
-  }
-
-  $nextHop = $route.NextHop
-  if ($null -eq $nextHop -and $null -ne $route.Gateway) {
-    $nextHop = $route.Gateway
-  }
-
-  if ($null -eq $interfaceIndex -or [string]::IsNullOrWhiteSpace([string]$nextHop)) {
-    return $false
-  }
-
-  $nextHop = [string]$nextHop
-  if ($nextHop -eq '0.0.0.0' -or $nextHop -eq 'On-link') {
-    return $false
-  }
-
-  Write-Output ("{0}|{1}" -f ([int]$interfaceIndex), $nextHop)
-  return $true
+if ($null -eq $route -or [string]::IsNullOrWhiteSpace([string]$route.NextHop)) {
+  exit 2
 }
 
-try {
-  $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
-    Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne $null } |
-    Sort-Object RouteMetric, InterfaceMetric |
-    Select-Object -First 1 @{Name='InterfaceIndex';Expression={$_.ifIndex}}, NextHop
-  if (Emit-RouteLine $route) {
-    exit 0
-  }
-} catch {
-}
-
-try {
-  $route = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_IP4RouteTable -ErrorAction Stop |
-    Where-Object {
-      $_.Destination -eq '0.0.0.0' -and
-      $_.Mask -eq '0.0.0.0' -and
-      $_.NextHop -ne '0.0.0.0' -and
-      $_.NextHop -ne $null
-    } |
-    Sort-Object Metric1 |
-    Select-Object -First 1 InterfaceIndex, NextHop
-  if (Emit-RouteLine $route) {
-    exit 0
-  }
-} catch {
-}
-
-$routePrint = route print -4
-if ($LASTEXITCODE -ne 0) {
-  Write-Error 'Failed to query the Windows IPv4 routing table.'
-  exit 1
-}
-
-$interfaceByIp = @{}
-try {
-  $adapterConfigs = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_NetworkAdapterConfiguration -ErrorAction Stop |
-    Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -ne $null }
-  foreach ($adapterConfig in $adapterConfigs) {
-    foreach ($ipAddress in $adapterConfig.IPAddress) {
-      if ($ipAddress -match '^\d+\.\d+\.\d+\.\d+$') {
-        $interfaceByIp[$ipAddress] = [int]$adapterConfig.InterfaceIndex
-      }
-    }
-  }
-} catch {
-}
-
-$routes = @()
-$inActiveRoutes = $false
-foreach ($line in ($routePrint -split "`r?`n")) {
-  if ($line -match '^\s*Active Routes:\s*$') {
-    $inActiveRoutes = $true
-    continue
-  }
-  if ($inActiveRoutes -and $line -match '^\s*=+') {
-    continue
-  }
-  if ($inActiveRoutes -and $line -match '^\s*Persistent Routes:\s*$') {
-    break
-  }
-  if (-not $inActiveRoutes) {
-    continue
-  }
-  if ($line -match '^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$') {
-    $gateway = $matches[1]
-    $interfaceIp = $matches[2]
-    $metric = [int]$matches[3]
-    if ($gateway -eq 'On-link' -or $gateway -eq '0.0.0.0') {
-      continue
-    }
-    if ($interfaceByIp.ContainsKey($interfaceIp)) {
-      $routes += [pscustomobject]@{
-        InterfaceIndex = $interfaceByIp[$interfaceIp]
-        NextHop = $gateway
-        Metric = $metric
-      }
-    }
-  }
-}
-
-$route = $routes | Sort-Object Metric | Select-Object -First 1
-if (Emit-RouteLine $route) {
-  exit 0
-}
-
-Write-Error 'Failed to detect the active Windows default route.'
-exit 1
+Write-Output ("{0}|{1}" -f ([int]$route.InterfaceIndex), ([string]$route.NextHop))
 ''';
 
-    final ProcessResult result = await Process.run(
+    final ProcessResult cimResult = await Process.run(
       'powershell',
-      <String>['-NoProfile', '-Command', primaryRouteScript],
+      <String>['-NoProfile', '-Command', cimRouteScript],
       runInShell: false,
     );
-    if (result.exitCode != 0) {
+
+    final String cimPayload = _extractWindowsScriptPayload('${cimResult.stdout}');
+    if (cimResult.exitCode == 0 && cimPayload.contains('|')) {
+      final _WindowsRouteInfo? parsed = _parseWindowsRouteLine(cimPayload);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+
+    final ProcessResult routePrintResult = await Process.run(
+      'route',
+      <String>['print', '-4'],
+      runInShell: false,
+    );
+    if (routePrintResult.exitCode != 0) {
       throw ProcessException(
-        'powershell',
-        <String>[],
-        '${result.stdout}\n${result.stderr}',
-        result.exitCode,
+        'route',
+        <String>['print', '-4'],
+        '${routePrintResult.stdout}\n${routePrintResult.stderr}',
+        routePrintResult.exitCode,
       );
     }
 
-    final String payload = '${result.stdout}'
-        .split(RegExp(r'\r?\n'))
-        .map((String line) => line.trim())
-        .firstWhere((String line) => line.contains('|'), orElse: () => '');
+    final _WindowsRouteInfo? parsedRoute = _parseWindowsPrimaryRouteFromRoutePrint(
+      '${routePrintResult.stdout}',
+    );
+    if (parsedRoute != null) {
+      return parsedRoute;
+    }
+
+    throw const FormatException(
+      'Failed to detect the active Windows default route from route print output.',
+    );
+  }
+
+  _WindowsRouteInfo? _parseWindowsRouteLine(String payload) {
     final List<String> parts = payload.split('|');
     if (parts.length < 2) {
-      throw FormatException(
-        'Failed to detect the active Windows default route. Empty or malformed payload: "$payload"',
-      );
+      return null;
     }
+
     final int? interfaceIndex = int.tryParse(parts.first.trim());
     final String nextHop = parts.sublist(1).join('|').trim();
     if (interfaceIndex == null || nextHop.isEmpty) {
-      throw FormatException(
-        'Failed to detect the active Windows default route. Empty or malformed payload: "$payload"',
+      return null;
+    }
+
+    return _WindowsRouteInfo(interfaceIndex: interfaceIndex, nextHop: nextHop);
+  }
+
+  String _extractWindowsScriptPayload(String stdout) {
+    for (final String line in stdout.split(RegExp(r'\r?\n'))) {
+      final String trimmed = line.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return '';
+  }
+
+  _WindowsRouteInfo? _parseWindowsPrimaryRouteFromRoutePrint(String output) {
+    final RegExp routeLinePattern = RegExp(
+      r'^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$');
+    final List<_WindowsRouteCandidate> candidates = <_WindowsRouteCandidate>[];
+
+    bool inActiveRoutes = false;
+
+    for (final String rawLine in output.split(RegExp(r'\r?\n'))) {
+      final String trimmed = rawLine.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+
+      if (trimmed == 'Active Routes:') {
+        inActiveRoutes = true;
+        continue;
+      }
+      if (trimmed == 'Persistent Routes:') {
+        break;
+      }
+      if (!inActiveRoutes) {
+        continue;
+      }
+
+      final RegExpMatch? routeMatch = routeLinePattern.firstMatch(trimmed);
+      if (routeMatch == null) {
+        continue;
+      }
+
+      final String nextHop = routeMatch.group(1)!.trim();
+      final int? metric = int.tryParse(routeMatch.group(3)!);
+      if (metric == null || nextHop == 'On-link' || nextHop == '0.0.0.0') {
+        continue;
+      }
+
+      candidates.add(
+        _WindowsRouteCandidate(
+          interfaceIndex: 0,
+          nextHop: nextHop,
+          metric: metric,
+        ),
       );
     }
-    return _WindowsRouteInfo(interfaceIndex: interfaceIndex, nextHop: nextHop);
+
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    candidates.sort((a, b) => a.metric.compareTo(b.metric));
+    final _WindowsRouteCandidate best = candidates.first;
+    return _WindowsRouteInfo(
+      interfaceIndex: best.interfaceIndex,
+      nextHop: best.nextHop,
+    );
   }
 
   Future<int> _waitForWindowsTunInterfaceIndex(String adapterName) async {
@@ -953,6 +929,18 @@ exit 1
       await file.delete();
     }
   }
+}
+
+class _WindowsRouteCandidate {
+  const _WindowsRouteCandidate({
+    required this.interfaceIndex,
+    required this.nextHop,
+    required this.metric,
+  });
+
+  final int interfaceIndex;
+  final String nextHop;
+  final int metric;
 }
 
 class _WindowsRouteInfo {

@@ -29,6 +29,7 @@ class DesktopXrayRuntimeManager {
   bool _activeDeviceTunnelMode = false;
   int? _windowsTunInterfaceIndex;
   String? _windowsPrimaryGateway;
+  String? _windowsTunObservedIpv4;
   final Set<String> _windowsTunBypassAddresses = <String>{};
 
   bool get isSupportedDesktop => Platform.isWindows || Platform.isLinux;
@@ -265,7 +266,10 @@ class DesktopXrayRuntimeManager {
       _stdoutSubscription = process.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
-          .listen((String line) => _logger.info(_tag, '[stdout] $line'));
+          .listen((String line) {
+        _captureWindowsTunTelemetry(line);
+        _logger.info(_tag, '[stdout] $line');
+      });
       _stderrSubscription = process.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -479,6 +483,7 @@ class DesktopXrayRuntimeManager {
     }
 
     await _teardownWindowsTunRouting();
+    _windowsTunObservedIpv4 = null;
 
     final Map<String, dynamic> decodedConfig =
         Map<String, dynamic>.from(jsonDecode(configJson) as Map<Object?, Object?>);
@@ -562,7 +567,36 @@ class DesktopXrayRuntimeManager {
 
     _windowsTunInterfaceIndex = null;
     _windowsPrimaryGateway = null;
+    _windowsTunObservedIpv4 = null;
     _windowsTunBypassAddresses.clear();
+  }
+
+  void _captureWindowsTunTelemetry(String line) {
+    if (!Platform.isWindows || !_activeDeviceTunnelMode) {
+      return;
+    }
+
+    final RegExpMatch? match = RegExp(
+      r'from (?:udp|tcp):((?:\d{1,3}\.){3}\d{1,3})(?::\d+)? .*\[tun-in ->',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (match == null) {
+      return;
+    }
+
+    final String candidate = match.group(1)?.trim() ?? '';
+    if (candidate.isEmpty ||
+        !candidate.startsWith('169.254.') ||
+        candidate == '169.254.255.255') {
+      return;
+    }
+
+    if (_windowsTunObservedIpv4 == candidate) {
+      return;
+    }
+
+    _windowsTunObservedIpv4 = candidate;
+    _logger.info(_tag, 'Observed Windows TUN IPv4 address from runtime traffic: $candidate');
   }
 
   Set<String> _extractUpstreamHosts(Map<String, dynamic> config) {
@@ -794,6 +828,7 @@ Write-Output ("{0}|{1}" -f ([int]$route.InterfaceIndex), ([string]$route.NextHop
     final String escapedAdapterName = adapterName.replaceAll("'", "''");
     String adapterLookupScript = r'''$ErrorActionPreference = 'Stop'
 $AdapterName = '__ADAPTER_NAME__'
+$ObservedIp = '__OBSERVED_IP__'
 
 function Emit-AdapterLine($adapter) {
   if ($null -eq $adapter) {
@@ -836,17 +871,42 @@ try {
 } catch {
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ObservedIp)) {
+  try {
+    $ipEntry = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $ObservedIp -ErrorAction Stop |
+      Select-Object -First 1 InterfaceIndex
+    if (Emit-AdapterLine $ipEntry) {
+      exit 0
+    }
+  } catch {
+  }
+
+  try {
+    $ipEntry = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_NetworkAdapterConfiguration -ErrorAction Stop |
+      Where-Object {
+        $_.IPAddress -contains $ObservedIp
+      } |
+      Select-Object -First 1 InterfaceIndex
+    if (Emit-AdapterLine $ipEntry) {
+      exit 0
+    }
+  } catch {
+  }
+}
+
 exit 1
 ''';
     adapterLookupScript = adapterLookupScript.replaceAll('__ADAPTER_NAME__', escapedAdapterName);
 
-    for (int attempt = 0; attempt < 20; attempt += 1) {
+    for (int attempt = 0; attempt < 30; attempt += 1) {
+      final String observedIp = (_windowsTunObservedIpv4 ?? '').replaceAll("'", "''");
+      final String command = adapterLookupScript.replaceAll('__OBSERVED_IP__', observedIp);
       final ProcessResult result = await Process.run(
         'powershell',
         <String>[
           '-NoProfile',
           '-Command',
-          adapterLookupScript,
+          command,
         ],
         runInShell: false,
       );
@@ -863,10 +923,13 @@ exit 1
       await Future<void>.delayed(const Duration(milliseconds: 350));
     }
 
+    final String observedIpDetails = _windowsTunObservedIpv4 == null
+        ? ' No TUN IPv4 address was observed from the Xray runtime logs.'
+        : ' Observed TUN IPv4: ${_windowsTunObservedIpv4!}.';
     throw ProcessException(
       'powershell',
       <String>[],
-      'Timed out while waiting for the Windows TUN adapter "$adapterName" to appear.',
+      'Timed out while waiting for the Windows TUN adapter "$adapterName" to appear.$observedIpDetails',
       1,
     );
   }

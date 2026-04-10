@@ -26,7 +26,14 @@ void main() {
 }
 
 class AwManagerApp extends StatelessWidget {
-  const AwManagerApp({super.key});
+  const AwManagerApp({
+    super.key,
+    this.disableStartupSideEffects = false,
+    this.enableWindowsPortraitFrame = true,
+  });
+
+  final bool disableStartupSideEffects;
+  final bool enableWindowsPortraitFrame;
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +46,7 @@ class AwManagerApp extends StatelessWidget {
         if (child == null) {
           return const SizedBox.shrink();
         }
-        if (!Platform.isWindows) {
+        if (!enableWindowsPortraitFrame || !Platform.isWindows) {
           return child;
         }
         return _WindowsPortraitFrame(child: child);
@@ -57,13 +64,15 @@ class AwManagerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: HomeScreen(disableStartupSideEffects: disableStartupSideEffects),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.disableStartupSideEffects = false});
+
+  final bool disableStartupSideEffects;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -92,13 +101,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _awImportService = AwImportService(logger: _logger);
     _xrayConfigBuilder = AwXrayConfigBuilder(logger: _logger);
     _logExportService = AppLogExportService(logger: _logger);
     _runtimeSettingsStore = RuntimeSettingsStore();
     _configStore = ConfigStore();
     _vpnEngine = createVpnEngine(logger: _logger);
+    if (widget.disableStartupSideEffects) {
+      _isLoadingRuntimeSettings = false;
+      _configsLoaded = true;
+      return;
+    }
+    WidgetsBinding.instance.addObserver(this);
     _loadPersistedConfigs();
     _loadRuntimeSettings();
     _runtimeWatchdog = Timer.periodic(const Duration(seconds: 8), (_) => _pollRuntimeHealth());

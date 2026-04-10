@@ -64,13 +64,18 @@ class AwManagerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: HomeScreen(disableStartupSideEffects: disableStartupSideEffects),
+      home: HomeScreen(
+        disableStartupSideEffects: disableStartupSideEffects,
+      ),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.disableStartupSideEffects = false});
+  const HomeScreen({
+    super.key,
+    this.disableStartupSideEffects = false,
+  });
 
   final bool disableStartupSideEffects;
 
@@ -101,6 +106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _awImportService = AwImportService(logger: _logger);
     _xrayConfigBuilder = AwXrayConfigBuilder(logger: _logger);
     _logExportService = AppLogExportService(logger: _logger);
@@ -112,7 +118,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _configsLoaded = true;
       return;
     }
-    WidgetsBinding.instance.addObserver(this);
     _loadPersistedConfigs();
     _loadRuntimeSettings();
     _runtimeWatchdog = Timer.periodic(const Duration(seconds: 8), (_) => _pollRuntimeHealth());

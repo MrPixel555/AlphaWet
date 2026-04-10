@@ -89,6 +89,7 @@ class AwManagerApp extends StatelessWidget {
       ),
       home: HomeScreen(
         disableStartupSideEffects: disableStartupSideEffects,
+        enableWindowsPortraitFrame: enableWindowsPortraitFrame,
       ),
     );
   }
@@ -98,9 +99,11 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     this.disableStartupSideEffects = false,
+    this.enableWindowsPortraitFrame = true,
   });
 
   final bool disableStartupSideEffects;
+  final bool enableWindowsPortraitFrame;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -1080,9 +1083,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
+    final bool useCustomWindowsChrome = Platform.isWindows && widget.enableWindowsPortraitFrame;
     return Scaffold(
       appBar: AppBar(
-        title: Platform.isWindows
+        title: useCustomWindowsChrome
             ? const DragToMoveArea(child: _AlphaWetTitle())
             : const _AlphaWetTitle(),
         centerTitle: false,
@@ -1102,7 +1106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onPressed: _previewLogs,
             icon: const Icon(Icons.article_outlined),
           ),
-          if (Platform.isWindows) ...<Widget>[
+          if (useCustomWindowsChrome) ...<Widget>[
             const SizedBox(width: 4),
             IconButton(
               tooltip: 'Minimize window',
@@ -1652,28 +1656,40 @@ class _AlphaWetTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colors = theme.colorScheme;
+    final ColorScheme colors = Theme.of(context).colorScheme;
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: colors.primaryContainer,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            Icons.water_drop_rounded,
-            color: colors.onPrimaryContainer,
-            size: 20,
-          ),
-        ),
-        const SizedBox(width: 10),
-        const Text('AlphaWet'),
-      ],
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact = constraints.maxWidth.isFinite && constraints.maxWidth < 190;
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: colors.primaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.water_drop_rounded,
+                color: colors.onPrimaryContainer,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                compact ? 'AW' : 'AlphaWet',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

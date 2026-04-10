@@ -54,6 +54,14 @@ jobs:
             --org com.alphacraft \
             .
 
+      - name: Require Administrator for Windows TUN routing
+        if: matrix.target == 'windows'
+        shell: bash
+        run: |
+          PYTHON_BIN=python3
+          command -v python3 >/dev/null 2>&1 || PYTHON_BIN=python
+          "$PYTHON_BIN" tool/patch_windows_manifest.py
+
       - name: Download desktop Xray runtime assets
         shell: bash
         env:

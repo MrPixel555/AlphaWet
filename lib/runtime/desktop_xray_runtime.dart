@@ -27,6 +27,10 @@ class DesktopXrayRuntimeManager {
   String? _lastMessage;
   DateTime? _startedAt;
   bool _activeDeviceTunnelMode = false;
+  int? _windowsTunInterfaceIndex;
+  int? _windowsPrimaryInterfaceIndex;
+  String? _windowsPrimaryGateway;
+  final Set<String> _windowsTunBypassAddresses = <String>{};
 
   bool get isSupportedDesktop => Platform.isWindows || Platform.isLinux;
 
@@ -199,10 +203,12 @@ class DesktopXrayRuntimeManager {
     final Process? process = _process;
     if (process == null) {
       _lastMessage = 'Desktop runtime is already stopped.';
+      await _teardownWindowsTunRouting();
       return;
     }
 
     _logger.info(_tag, 'Stopping desktop Xray runtime.');
+    await _teardownWindowsTunRouting();
     process.kill();
     await _tryReadExitCode(process, const Duration(seconds: 4));
     await _clearActiveRuntime('Desktop runtime stopped.');
@@ -281,6 +287,26 @@ class DesktopXrayRuntimeManager {
           success: false,
           message: 'Desktop Xray exited before the proxy listeners became ready (exit code $earlyExitCode).',
         );
+      }
+
+      if (Platform.isWindows && runtimeSettings.enableDeviceVpn) {
+        try {
+          await _configureWindowsTunRouting(configJson);
+        } on Object catch (error, stackTrace) {
+          _logger.error(
+            _tag,
+            'Failed to configure temporary Windows TUN routing.',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          process.kill();
+          await _tryReadExitCode(process, const Duration(seconds: 2));
+          await _clearActiveRuntime('Desktop runtime failed to install the Windows TUN routes.');
+          return DesktopRuntimeStartResult(
+            success: false,
+            message: '$error',
+          );
+        }
       }
 
       return DesktopRuntimeStartResult(
@@ -418,6 +444,7 @@ class DesktopXrayRuntimeManager {
   }
 
   Future<void> _clearActiveRuntime(String message) async {
+    await _teardownWindowsTunRouting();
     await _stdoutSubscription?.cancel();
     await _stderrSubscription?.cancel();
     _stdoutSubscription = null;
@@ -438,11 +465,332 @@ class DesktopXrayRuntimeManager {
     }
   }
 
+  Future<void> _configureWindowsTunRouting(String configJson) async {
+    if (!Platform.isWindows) {
+      return;
+    }
+
+    if (!await _isWindowsAdministrator()) {
+      throw const ProcessException(
+        'route',
+        <String>[],
+        'Windows TUN mode needs Administrator privileges so AlphaWet can install temporary routes.',
+        5,
+      );
+    }
+
+    await _teardownWindowsTunRouting();
+
+    final Map<String, dynamic> decodedConfig =
+        Map<String, dynamic>.from(jsonDecode(configJson) as Map<Object?, Object?>);
+    final Set<String> upstreamHosts = _extractUpstreamHosts(decodedConfig);
+    final Set<String> upstreamAddresses = await _resolveIpv4Addresses(upstreamHosts);
+    if (upstreamAddresses.isEmpty) {
+      throw const FormatException(
+        'Could not resolve the upstream server address for Windows TUN mode.',
+      );
+    }
+
+    final _WindowsRouteInfo primaryRoute = await _readWindowsPrimaryRoute();
+    final int tunInterfaceIndex = await _waitForWindowsTunInterfaceIndex('alphawet');
+
+    await _runWindowsRouteDelete(
+      <String>['DELETE', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex'],
+    );
+    await _runWindowsRoute(
+      <String>['ADD', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex', 'METRIC', '1'],
+    );
+
+    for (final String address in upstreamAddresses) {
+      await _runWindowsRouteDelete(
+        <String>[
+          'DELETE',
+          address,
+          'MASK',
+          '255.255.255.255',
+          primaryRoute.nextHop,
+          'IF',
+          '${primaryRoute.interfaceIndex}',
+        ],
+      );
+      await _runWindowsRoute(
+        <String>[
+          'ADD',
+          address,
+          'MASK',
+          '255.255.255.255',
+          primaryRoute.nextHop,
+          'IF',
+          '${primaryRoute.interfaceIndex}',
+          'METRIC',
+          '1',
+        ],
+      );
+      _windowsTunBypassAddresses.add(address);
+    }
+
+    _windowsTunInterfaceIndex = tunInterfaceIndex;
+    _windowsPrimaryInterfaceIndex = primaryRoute.interfaceIndex;
+    _windowsPrimaryGateway = primaryRoute.nextHop;
+
+    _logger.info(
+      _tag,
+      'Installed Windows TUN routes. tunIf=$tunInterfaceIndex, upstreamBypass=${upstreamAddresses.join(', ')}',
+    );
+  }
+
+  Future<void> _teardownWindowsTunRouting() async {
+    if (!Platform.isWindows) {
+      return;
+    }
+
+    final int? tunInterfaceIndex = _windowsTunInterfaceIndex;
+    if (tunInterfaceIndex != null) {
+      await _runWindowsRouteDelete(
+        <String>['DELETE', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex'],
+      );
+    }
+
+    final int? primaryInterfaceIndex = _windowsPrimaryInterfaceIndex;
+    final String? primaryGateway = _windowsPrimaryGateway;
+    if (primaryInterfaceIndex != null && primaryGateway != null) {
+      for (final String address in _windowsTunBypassAddresses) {
+        await _runWindowsRouteDelete(
+          <String>[
+            'DELETE',
+            address,
+            'MASK',
+            '255.255.255.255',
+            primaryGateway,
+            'IF',
+            '$primaryInterfaceIndex',
+          ],
+        );
+      }
+    }
+
+    _windowsTunInterfaceIndex = null;
+    _windowsPrimaryInterfaceIndex = null;
+    _windowsPrimaryGateway = null;
+    _windowsTunBypassAddresses.clear();
+  }
+
+  Set<String> _extractUpstreamHosts(Map<String, dynamic> config) {
+    final Set<String> hosts = <String>{};
+    final Object? outboundsObject = config['outbounds'];
+    if (outboundsObject is! List) {
+      return hosts;
+    }
+
+    for (final Object? outboundObject in outboundsObject) {
+      if (outboundObject is! Map) {
+        continue;
+      }
+      final Map<String, dynamic> outbound = Map<String, dynamic>.from(outboundObject);
+      final Object? settingsObject = outbound['settings'];
+      if (settingsObject is! Map) {
+        continue;
+      }
+      final Map<String, dynamic> settings = Map<String, dynamic>.from(settingsObject);
+
+      final Object? vnextObject = settings['vnext'];
+      if (vnextObject is List) {
+        for (final Object? serverObject in vnextObject) {
+          if (serverObject is! Map) {
+            continue;
+          }
+          final Map<String, dynamic> server = Map<String, dynamic>.from(serverObject);
+          final String? address = server['address'] as String?;
+          if (address != null && address.trim().isNotEmpty) {
+            hosts.add(address.trim());
+          }
+        }
+      }
+
+      final Object? serversObject = settings['servers'];
+      if (serversObject is List) {
+        for (final Object? serverObject in serversObject) {
+          if (serverObject is! Map) {
+            continue;
+          }
+          final Map<String, dynamic> server = Map<String, dynamic>.from(serverObject);
+          final String? address = server['address'] as String?;
+          if (address != null && address.trim().isNotEmpty) {
+            hosts.add(address.trim());
+          }
+        }
+      }
+    }
+
+    return hosts;
+  }
+
+  Future<Set<String>> _resolveIpv4Addresses(Set<String> hosts) async {
+    final Set<String> addresses = <String>{};
+    for (final String host in hosts) {
+      final String trimmedHost = host.trim();
+      if (trimmedHost.isEmpty) {
+        continue;
+      }
+
+      final InternetAddress? parsed = InternetAddress.tryParse(trimmedHost);
+      if (parsed != null) {
+        if (parsed.type == InternetAddressType.IPv4) {
+          addresses.add(parsed.address);
+        }
+        continue;
+      }
+
+      try {
+        final List<InternetAddress> lookupResult = await InternetAddress.lookup(trimmedHost);
+        for (final InternetAddress address in lookupResult) {
+          if (address.type == InternetAddressType.IPv4) {
+            addresses.add(address.address);
+          }
+        }
+      } on SocketException catch (error, stackTrace) {
+        _logger.warning(
+          _tag,
+          'Failed to resolve Windows TUN upstream host "$trimmedHost".',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+    return addresses;
+  }
+
+  Future<_WindowsRouteInfo> _readWindowsPrimaryRoute() async {
+    final ProcessResult result = await Process.run(
+      'powershell',
+      <String>[
+        '-NoProfile',
+        '-Command',
+        "\$route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { \$_.NextHop -ne '0.0.0.0' -and \$_.NextHop -ne \$null } | Sort-Object RouteMetric | Select-Object -First 1 @{Name='InterfaceIndex';Expression={\$_.ifIndex}}, NextHop; if (\$null -eq \$route) { exit 1 }; \$route | ConvertTo-Json -Compress",
+      ],
+      runInShell: false,
+    );
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        'powershell',
+        <String>[],
+        '${result.stdout}\n${result.stderr}',
+        result.exitCode,
+      );
+    }
+
+    final String payload = '${result.stdout}'.trim();
+    final Map<String, dynamic> decoded =
+        Map<String, dynamic>.from(jsonDecode(payload) as Map<Object?, Object?>);
+    final int? interfaceIndex = (decoded['InterfaceIndex'] as num?)?.toInt();
+    final String nextHop = '${decoded['NextHop'] ?? ''}'.trim();
+    if (interfaceIndex == null || nextHop.isEmpty) {
+      throw const FormatException('Failed to detect the active Windows default route.');
+    }
+    return _WindowsRouteInfo(interfaceIndex: interfaceIndex, nextHop: nextHop);
+  }
+
+  Future<int> _waitForWindowsTunInterfaceIndex(String adapterName) async {
+    for (int attempt = 0; attempt < 20; attempt += 1) {
+      final ProcessResult result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "\$adapter = Get-NetAdapter -Name '$adapterName' -ErrorAction SilentlyContinue | Select-Object -First 1 @{Name='InterfaceIndex';Expression={\$_.ifIndex}}; if (\$null -eq \$adapter) { exit 1 }; \$adapter | ConvertTo-Json -Compress",
+        ],
+        runInShell: false,
+      );
+      if (result.exitCode == 0) {
+        final String payload = '${result.stdout}'.trim();
+        if (payload.isNotEmpty) {
+          final Map<String, dynamic> decoded =
+              Map<String, dynamic>.from(jsonDecode(payload) as Map<Object?, Object?>);
+          final int? interfaceIndex = (decoded['InterfaceIndex'] as num?)?.toInt();
+          if (interfaceIndex != null) {
+            return interfaceIndex;
+          }
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+    }
+
+    throw ProcessException(
+      'powershell',
+      <String>[],
+      'Timed out while waiting for the Windows TUN adapter "$adapterName" to appear.',
+      1,
+    );
+  }
+
+  Future<bool> _isWindowsAdministrator() async {
+    if (!Platform.isWindows) {
+      return true;
+    }
+
+    final ProcessResult result = await Process.run(
+      'powershell',
+      <String>[
+        '-NoProfile',
+        '-Command',
+        '[bool](([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))',
+      ],
+      runInShell: false,
+    );
+    return result.exitCode == 0 && '${result.stdout}'.trim().toLowerCase() == 'true';
+  }
+
+  Future<void> _runWindowsRoute(List<String> arguments) async {
+    final ProcessResult result = await Process.run('route', arguments, runInShell: false);
+    if (result.exitCode == 0) {
+      return;
+    }
+
+    final String details = '${result.stdout}\n${result.stderr}'.trim();
+    final String normalized = details.toLowerCase();
+    if (normalized.contains('requires elevation') || normalized.contains('access is denied')) {
+      throw ProcessException(
+        'route',
+        arguments,
+        'Windows TUN mode needs Administrator privileges so AlphaWet can install temporary routes.\n$details',
+        result.exitCode,
+      );
+    }
+
+    throw ProcessException('route', arguments, details, result.exitCode);
+  }
+
+  Future<void> _runWindowsRouteDelete(List<String> arguments) async {
+    final ProcessResult result = await Process.run('route', arguments, runInShell: false);
+    if (result.exitCode == 0) {
+      return;
+    }
+
+    final String details = '${result.stdout}\n${result.stderr}'.trim().toLowerCase();
+    if (details.contains('not found') ||
+        details.contains('cannot find') ||
+        details.contains('the route specified was not found')) {
+      return;
+    }
+
+    _logger.warning(_tag, 'Failed to delete temporary Windows route: ${arguments.join(' ')}');
+  }
+
   Future<void> _deleteIfExists(File file) async {
     if (await file.exists()) {
       await file.delete();
     }
   }
+}
+
+class _WindowsRouteInfo {
+  const _WindowsRouteInfo({
+    required this.interfaceIndex,
+    required this.nextHop,
+  });
+
+  final int interfaceIndex;
+  final String nextHop;
 }
 
 class DesktopRuntimeStartResult {

@@ -38,13 +38,14 @@ Future<void> _configureDesktopWindow() async {
   const Size initialSize = Size(432, 768);
   const Size minimumSize = Size(360, 640);
 
-  final WindowOptions windowOptions = WindowOptions(
+  const WindowOptions windowOptions = WindowOptions(
     size: initialSize,
     minimumSize: minimumSize,
     center: true,
     backgroundColor: Colors.transparent,
     skipTaskbar: false,
-    titleBarStyle: TitleBarStyle.normal,
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -1081,7 +1082,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final ColorScheme colors = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const _AlphaWetTitle(),
+        title: Platform.isWindows
+            ? const DragToMoveArea(child: _AlphaWetTitle())
+            : const _AlphaWetTitle(),
         centerTitle: false,
         actions: <Widget>[
           IconButton(
@@ -1099,6 +1102,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onPressed: _previewLogs,
             icon: const Icon(Icons.article_outlined),
           ),
+          if (Platform.isWindows) ...<Widget>[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Minimize window',
+              onPressed: () => windowManager.minimize(),
+              icon: const Icon(Icons.minimize_rounded),
+            ),
+            IconButton(
+              tooltip: 'Close window',
+              onPressed: () => windowManager.close(),
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ],
           const SizedBox(width: 8),
         ],
       ),

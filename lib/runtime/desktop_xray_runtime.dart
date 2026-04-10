@@ -63,7 +63,7 @@ class DesktopXrayRuntimeManager {
     };
   }
 
-  Future<String> ensureBinaryReady() async {
+  Future<String> ensureBinaryReady({bool deviceTunnelRequested = false}) async {
     if (!isSupportedDesktop) {
       throw UnsupportedError('Desktop Xray runtime is only supported on Windows and Linux.');
     }
@@ -78,6 +78,17 @@ class DesktopXrayRuntimeManager {
     final File binaryFile = File('${runtimeDirectory.path}${Platform.pathSeparator}$binaryName');
 
     await _stageRequiredAsset(assetKey, binaryFile);
+    if (Platform.isWindows && deviceTunnelRequested) {
+      await _stageRequiredAsset(
+        'assets/xray/desktop/wintun.dll',
+        File('${runtimeDirectory.path}${Platform.pathSeparator}wintun.dll'),
+      );
+    } else if (Platform.isWindows) {
+      await _stageOptionalAsset(
+        'assets/xray/desktop/wintun.dll',
+        File('${runtimeDirectory.path}${Platform.pathSeparator}wintun.dll'),
+      );
+    }
     await _stageOptionalAsset(
       'assets/xray/common/geoip.dat',
       File('${runtimeDirectory.path}${Platform.pathSeparator}geoip.dat'),
@@ -117,7 +128,7 @@ class DesktopXrayRuntimeManager {
 
     final String binaryPath;
     try {
-      binaryPath = await ensureBinaryReady();
+      binaryPath = await ensureBinaryReady(deviceTunnelRequested: false);
     } on Object catch (error, stackTrace) {
       _logger.error(_tag, 'Failed to prepare desktop Xray binary for ping.', error: error, stackTrace: stackTrace);
       return <Object?, Object?>{
@@ -212,7 +223,7 @@ class DesktopXrayRuntimeManager {
 
     final String binaryPath;
     try {
-      binaryPath = await ensureBinaryReady();
+      binaryPath = await ensureBinaryReady(deviceTunnelRequested: runtimeSettings.enableDeviceVpn);
     } on Object catch (error, stackTrace) {
       _logger.error(_tag, 'Failed to prepare desktop Xray binary.', error: error, stackTrace: stackTrace);
       return DesktopRuntimeStartResult(success: false, message: '$error');

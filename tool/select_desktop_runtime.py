@@ -26,14 +26,24 @@ def main() -> int:
         return 2
 
     active_dir.mkdir(parents=True, exist_ok=True)
-    for binary_name in set(BINARY_NAMES.values()):
-        candidate = active_dir / binary_name
-        if candidate.exists():
+    for candidate in active_dir.iterdir():
+        if candidate.is_file() or candidate.is_symlink():
             candidate.unlink()
+        elif candidate.is_dir():
+            shutil.rmtree(candidate)
 
-    target_file = active_dir / BINARY_NAMES[platform_key]
-    shutil.copy2(source_file, target_file)
-    print(f'[OK] Activated desktop runtime: {platform_key} -> {target_file}')
+    copied = []
+    for candidate in source_dir.iterdir():
+        if not candidate.is_file():
+            continue
+        target_file = active_dir / candidate.name
+        shutil.copy2(candidate, target_file)
+        copied.append(target_file.name)
+
+    print(
+        f'[OK] Activated desktop runtime: {platform_key} -> {active_dir} '
+        f'({", ".join(sorted(copied))})'
+    )
     return 0
 
 

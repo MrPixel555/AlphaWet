@@ -24,6 +24,11 @@ BINARY_NAMES = {
     'linux': 'xray',
 }
 
+OPTIONAL_PLATFORM_MEMBERS = {
+    'windows': ('wintun.dll',),
+    'linux': (),
+}
+
 
 def build_headers(extra_headers=None):
     headers = {
@@ -136,6 +141,13 @@ def main() -> int:
         target_binary = assets_root / platform_key / binary_name
         target_binary.write_bytes(extract_from_zip(zip_bytes, binary_name))
         print(f'[OK] Wrote {target_binary}')
+
+        for extra_name in OPTIONAL_PLATFORM_MEMBERS.get(platform_key, ()):
+            extra_bytes = extract_optional(zip_bytes, extra_name)
+            if extra_bytes is not None:
+                extra_target = assets_root / platform_key / extra_name
+                extra_target.write_bytes(extra_bytes)
+                print(f'[OK] Wrote {extra_target}')
 
         geoip_bytes = extract_optional(zip_bytes, 'geoip.dat')
         geosite_bytes = extract_optional(zip_bytes, 'geosite.dat')

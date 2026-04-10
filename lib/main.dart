@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'models/aw_profile_models.dart';
 import 'models/config_entry.dart';
@@ -21,8 +22,38 @@ import 'services/aw_xray_config_builder.dart';
 import 'services/runtime_settings_store.dart';
 import 'widgets/config_card.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await _configureDesktopWindow();
   runApp(const AwManagerApp());
+}
+
+Future<void> _configureDesktopWindow() async {
+  if (!Platform.isWindows) {
+    return;
+  }
+
+  await windowManager.ensureInitialized();
+
+  const Size initialSize = Size(432, 768);
+  const Size minimumSize = Size(360, 640);
+
+  final WindowOptions windowOptions = WindowOptions(
+    size: initialSize,
+    minimumSize: minimumSize,
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: false,
+    titleBarStyle: TitleBarStyle.normal,
+  );
+
+  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.setAspectRatio(9 / 16);
+    await windowManager.setMinimumSize(minimumSize);
+    await windowManager.setMaximizable(false);
+    await windowManager.show();
+    await windowManager.focus();
+  });
 }
 
 class AwManagerApp extends StatelessWidget {
@@ -42,15 +73,6 @@ class AwManagerApp extends StatelessWidget {
     return MaterialApp(
       title: 'AlphaWet',
       debugShowCheckedModeBanner: false,
-      builder: (BuildContext context, Widget? child) {
-        if (child == null) {
-          return const SizedBox.shrink();
-        }
-        if (!enableWindowsPortraitFrame || !Platform.isWindows) {
-          return child;
-        }
-        return _WindowsPortraitFrame(child: child);
-      },
       themeMode: ThemeMode.system,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: seed),
@@ -115,7 +137,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _vpnEngine = createVpnEngine(logger: _logger);
     if (widget.disableStartupSideEffects) {
       _isLoadingRuntimeSettings = false;
-      _configsLoaded = true;
       return;
     }
     _loadPersistedConfigs();
@@ -1637,42 +1658,6 @@ class _AlphaWetTitle extends StatelessWidget {
         const SizedBox(width: 10),
         const Text('AlphaWet'),
       ],
-    );
-  }
-}
-
-class _WindowsPortraitFrame extends StatelessWidget {
-  const _WindowsPortraitFrame({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color background = Theme.of(context).scaffoldBackgroundColor;
-
-    return ColoredBox(
-      color: background,
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          final double maxHeight = constraints.maxHeight;
-          final double maxWidth = constraints.maxWidth;
-          final double portraitWidth = maxHeight * (9 / 16);
-          final double portraitHeight = maxWidth * (16 / 9);
-          final double width = portraitWidth <= maxWidth ? portraitWidth : maxWidth;
-          final double height = portraitWidth <= maxWidth ? maxHeight : portraitHeight;
-
-          return Center(
-            child: SizedBox(
-              width: width,
-              height: height <= maxHeight ? height : maxHeight,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: child,
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 }

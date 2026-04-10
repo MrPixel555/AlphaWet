@@ -57,7 +57,7 @@ jobs:
             --org com.alphacraft \
             .
 
-      - name: Require Administrator for Windows TUN routing
+      - name: Configure Windows UAC elevation for TUN routing
         if: matrix.target == 'windows'
         shell: bash
         run: |

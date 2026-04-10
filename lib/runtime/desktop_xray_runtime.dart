@@ -663,7 +663,7 @@ class DesktopXrayRuntimeManager {
   Future<_WindowsRouteInfo> _readWindowsPrimaryRoute() async {
     const String primaryRouteScript = r'''$ErrorActionPreference = 'Stop'
 
-function Emit-RouteJson($route) {
+function Emit-RouteLine($route) {
   if ($null -eq $route) {
     return $false
   }
@@ -682,11 +682,12 @@ function Emit-RouteJson($route) {
     return $false
   }
 
-  if ([string]$nextHop -eq '0.0.0.0' -or [string]$nextHop -eq 'On-link') {
+  $nextHop = [string]$nextHop
+  if ($nextHop -eq '0.0.0.0' -or $nextHop -eq 'On-link') {
     return $false
   }
 
-  @{ InterfaceIndex = [int]$interfaceIndex; NextHop = [string]$nextHop } | ConvertTo-Json -Compress
+  Write-Output ("{0}|{1}" -f ([int]$interfaceIndex), $nextHop)
   return $true
 }
 
@@ -695,7 +696,7 @@ try {
     Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne $null } |
     Sort-Object RouteMetric, InterfaceMetric |
     Select-Object -First 1 @{Name='InterfaceIndex';Expression={$_.ifIndex}}, NextHop
-  if (Emit-RouteJson $route) {
+  if (Emit-RouteLine $route) {
     exit 0
   }
 } catch {
@@ -711,7 +712,7 @@ try {
     } |
     Sort-Object Metric1 |
     Select-Object -First 1 InterfaceIndex, NextHop
-  if (Emit-RouteJson $route) {
+  if (Emit-RouteLine $route) {
     exit 0
   }
 } catch {
@@ -771,7 +772,7 @@ foreach ($line in ($routePrint -split "`r?`n")) {
 }
 
 $route = $routes | Sort-Object Metric | Select-Object -First 1
-if (Emit-RouteJson $route) {
+if (Emit-RouteLine $route) {
   exit 0
 }
 
@@ -793,13 +794,22 @@ exit 1
       );
     }
 
-    final String payload = '${result.stdout}'.trim();
-    final Map<String, dynamic> decoded =
-        Map<String, dynamic>.from(jsonDecode(payload) as Map<Object?, Object?>);
-    final int? interfaceIndex = (decoded['InterfaceIndex'] as num?)?.toInt();
-    final String nextHop = '${decoded['NextHop'] ?? ''}'.trim();
+    final String payload = '${result.stdout}'
+        .split(RegExp(r'\r?\n'))
+        .map((String line) => line.trim())
+        .firstWhere((String line) => line.contains('|'), orElse: () => '');
+    final List<String> parts = payload.split('|');
+    if (parts.length < 2) {
+      throw FormatException(
+        'Failed to detect the active Windows default route. Empty or malformed payload: "$payload"',
+      );
+    }
+    final int? interfaceIndex = int.tryParse(parts.first.trim());
+    final String nextHop = parts.sublist(1).join('|').trim();
     if (interfaceIndex == null || nextHop.isEmpty) {
-      throw const FormatException('Failed to detect the active Windows default route.');
+      throw FormatException(
+        'Failed to detect the active Windows default route. Empty or malformed payload: "$payload"',
+      );
     }
     return _WindowsRouteInfo(interfaceIndex: interfaceIndex, nextHop: nextHop);
   }
@@ -809,7 +819,7 @@ exit 1
     String adapterLookupScript = r'''$ErrorActionPreference = 'Stop'
 $AdapterName = '__ADAPTER_NAME__'
 
-function Emit-AdapterJson($adapter) {
+function Emit-AdapterLine($adapter) {
   if ($null -eq $adapter) {
     return $false
   }
@@ -822,14 +832,14 @@ function Emit-AdapterJson($adapter) {
     return $false
   }
 
-  @{ InterfaceIndex = [int]$interfaceIndex } | ConvertTo-Json -Compress
+  Write-Output ([string]([int]$interfaceIndex))
   return $true
 }
 
 try {
   $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop |
     Select-Object -First 1 @{Name='InterfaceIndex';Expression={$_.ifIndex}}
-  if (Emit-AdapterJson $adapter) {
+  if (Emit-AdapterLine $adapter) {
     exit 0
   }
 } catch {
@@ -844,7 +854,7 @@ try {
       ($_.Name -and $_.Name -like "*$AdapterName*")
     } |
     Select-Object -First 1 InterfaceIndex
-  if (Emit-AdapterJson $adapter) {
+  if (Emit-AdapterLine $adapter) {
     exit 0
   }
 } catch {
@@ -865,14 +875,13 @@ exit 1
         runInShell: false,
       );
       if (result.exitCode == 0) {
-        final String payload = '${result.stdout}'.trim();
-        if (payload.isNotEmpty) {
-          final Map<String, dynamic> decoded =
-              Map<String, dynamic>.from(jsonDecode(payload) as Map<Object?, Object?>);
-          final int? interfaceIndex = (decoded['InterfaceIndex'] as num?)?.toInt();
-          if (interfaceIndex != null) {
-            return interfaceIndex;
-          }
+        final String payload = '${result.stdout}'
+            .split(RegExp(r'\r?\n'))
+            .map((String line) => line.trim())
+            .firstWhere((String line) => line.isNotEmpty, orElse: () => '');
+        final int? interfaceIndex = int.tryParse(payload);
+        if (interfaceIndex != null) {
+          return interfaceIndex;
         }
       }
       await Future<void>.delayed(const Duration(milliseconds: 350));

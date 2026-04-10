@@ -661,13 +661,127 @@ class DesktopXrayRuntimeManager {
   }
 
   Future<_WindowsRouteInfo> _readWindowsPrimaryRoute() async {
+    const String primaryRouteScript = r'''$ErrorActionPreference = 'Stop'
+
+function Emit-RouteJson($route) {
+  if ($null -eq $route) {
+    return $false
+  }
+
+  $interfaceIndex = $route.InterfaceIndex
+  if ($null -eq $interfaceIndex -and $null -ne $route.ifIndex) {
+    $interfaceIndex = $route.ifIndex
+  }
+
+  $nextHop = $route.NextHop
+  if ($null -eq $nextHop -and $null -ne $route.Gateway) {
+    $nextHop = $route.Gateway
+  }
+
+  if ($null -eq $interfaceIndex -or [string]::IsNullOrWhiteSpace([string]$nextHop)) {
+    return $false
+  }
+
+  if ([string]$nextHop -eq '0.0.0.0' -or [string]$nextHop -eq 'On-link') {
+    return $false
+  }
+
+  @{ InterfaceIndex = [int]$interfaceIndex; NextHop = [string]$nextHop } | ConvertTo-Json -Compress
+  return $true
+}
+
+try {
+  $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+    Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne $null } |
+    Sort-Object RouteMetric, InterfaceMetric |
+    Select-Object -First 1 @{Name='InterfaceIndex';Expression={$_.ifIndex}}, NextHop
+  if (Emit-RouteJson $route) {
+    exit 0
+  }
+} catch {
+}
+
+try {
+  $route = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_IP4RouteTable -ErrorAction Stop |
+    Where-Object {
+      $_.Destination -eq '0.0.0.0' -and
+      $_.Mask -eq '0.0.0.0' -and
+      $_.NextHop -ne '0.0.0.0' -and
+      $_.NextHop -ne $null
+    } |
+    Sort-Object Metric1 |
+    Select-Object -First 1 InterfaceIndex, NextHop
+  if (Emit-RouteJson $route) {
+    exit 0
+  }
+} catch {
+}
+
+$routePrint = route print -4
+if ($LASTEXITCODE -ne 0) {
+  Write-Error 'Failed to query the Windows IPv4 routing table.'
+  exit 1
+}
+
+$interfaceByIp = @{}
+try {
+  $adapterConfigs = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_NetworkAdapterConfiguration -ErrorAction Stop |
+    Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -ne $null }
+  foreach ($adapterConfig in $adapterConfigs) {
+    foreach ($ipAddress in $adapterConfig.IPAddress) {
+      if ($ipAddress -match '^\d+\.\d+\.\d+\.\d+$') {
+        $interfaceByIp[$ipAddress] = [int]$adapterConfig.InterfaceIndex
+      }
+    }
+  }
+} catch {
+}
+
+$routes = @()
+$inActiveRoutes = $false
+foreach ($line in ($routePrint -split "`r?`n")) {
+  if ($line -match '^\s*Active Routes:\s*$') {
+    $inActiveRoutes = $true
+    continue
+  }
+  if ($inActiveRoutes -and $line -match '^\s*=+') {
+    continue
+  }
+  if ($inActiveRoutes -and $line -match '^\s*Persistent Routes:\s*$') {
+    break
+  }
+  if (-not $inActiveRoutes) {
+    continue
+  }
+  if ($line -match '^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$') {
+    $gateway = $matches[1]
+    $interfaceIp = $matches[2]
+    $metric = [int]$matches[3]
+    if ($gateway -eq 'On-link' -or $gateway -eq '0.0.0.0') {
+      continue
+    }
+    if ($interfaceByIp.ContainsKey($interfaceIp)) {
+      $routes += [pscustomobject]@{
+        InterfaceIndex = $interfaceByIp[$interfaceIp]
+        NextHop = $gateway
+        Metric = $metric
+      }
+    }
+  }
+}
+
+$route = $routes | Sort-Object Metric | Select-Object -First 1
+if (Emit-RouteJson $route) {
+  exit 0
+}
+
+Write-Error 'Failed to detect the active Windows default route.'
+exit 1
+''';
+
     final ProcessResult result = await Process.run(
       'powershell',
-      <String>[
-        '-NoProfile',
-        '-Command',
-        "\$route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { \$_.NextHop -ne '0.0.0.0' -and \$_.NextHop -ne \$null } | Sort-Object RouteMetric | Select-Object -First 1 @{Name='InterfaceIndex';Expression={\$_.ifIndex}}, NextHop; if (\$null -eq \$route) { exit 1 }; \$route | ConvertTo-Json -Compress",
-      ],
+      <String>['-NoProfile', '-Command', primaryRouteScript],
       runInShell: false,
     );
     if (result.exitCode != 0) {
@@ -691,13 +805,62 @@ class DesktopXrayRuntimeManager {
   }
 
   Future<int> _waitForWindowsTunInterfaceIndex(String adapterName) async {
+    final String escapedAdapterName = adapterName.replaceAll("'", "''");
+    String adapterLookupScript = r'''$ErrorActionPreference = 'Stop'
+$AdapterName = '__ADAPTER_NAME__'
+
+function Emit-AdapterJson($adapter) {
+  if ($null -eq $adapter) {
+    return $false
+  }
+
+  $interfaceIndex = $adapter.InterfaceIndex
+  if ($null -eq $interfaceIndex -and $null -ne $adapter.ifIndex) {
+    $interfaceIndex = $adapter.ifIndex
+  }
+  if ($null -eq $interfaceIndex) {
+    return $false
+  }
+
+  @{ InterfaceIndex = [int]$interfaceIndex } | ConvertTo-Json -Compress
+  return $true
+}
+
+try {
+  $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop |
+    Select-Object -First 1 @{Name='InterfaceIndex';Expression={$_.ifIndex}}
+  if (Emit-AdapterJson $adapter) {
+    exit 0
+  }
+} catch {
+}
+
+try {
+  $adapter = Get-CimInstance -Namespace 'root/CIMV2' -ClassName Win32_NetworkAdapter -ErrorAction Stop |
+    Where-Object {
+      $_.NetConnectionID -eq $AdapterName -or
+      $_.Name -eq $AdapterName -or
+      ($_.NetConnectionID -and $_.NetConnectionID -like "*$AdapterName*") -or
+      ($_.Name -and $_.Name -like "*$AdapterName*")
+    } |
+    Select-Object -First 1 InterfaceIndex
+  if (Emit-AdapterJson $adapter) {
+    exit 0
+  }
+} catch {
+}
+
+exit 1
+''';
+    adapterLookupScript = adapterLookupScript.replaceAll('__ADAPTER_NAME__', escapedAdapterName);
+
     for (int attempt = 0; attempt < 20; attempt += 1) {
       final ProcessResult result = await Process.run(
         'powershell',
         <String>[
           '-NoProfile',
           '-Command',
-          "\$adapter = Get-NetAdapter -Name '$adapterName' -ErrorAction SilentlyContinue | Select-Object -First 1 @{Name='InterfaceIndex';Expression={\$_.ifIndex}}; if (\$null -eq \$adapter) { exit 1 }; \$adapter | ConvertTo-Json -Compress",
+          adapterLookupScript,
         ],
         runInShell: false,
       );

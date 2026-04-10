@@ -482,6 +482,8 @@ class DesktopXrayRuntimeManager {
       );
     }
 
+    const String tunAdapterName = 'alphawet';
+
     await _teardownWindowsTunRouting();
     _windowsTunObservedIpv4 = null;
 
@@ -496,14 +498,8 @@ class DesktopXrayRuntimeManager {
     }
 
     final _WindowsRouteInfo primaryRoute = await _readWindowsPrimaryRoute();
-    final int tunInterfaceIndex = await _waitForWindowsTunInterfaceIndex('alphawet');
 
-    await _runWindowsRouteDelete(
-      <String>['DELETE', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex'],
-    );
-    await _runWindowsRoute(
-      <String>['ADD', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex', 'METRIC', '1'],
-    );
+    await _runWindowsTunDefaultRouteDeleteByName(tunAdapterName);
 
     for (final String address in upstreamAddresses) {
       await _runWindowsRouteDelete(
@@ -529,12 +525,25 @@ class DesktopXrayRuntimeManager {
       _windowsTunBypassAddresses.add(address);
     }
 
-    _windowsTunInterfaceIndex = tunInterfaceIndex;
+    await _runWindowsTunDefaultRouteAddByName(tunAdapterName);
+
+    try {
+      _windowsTunInterfaceIndex = await _waitForWindowsTunInterfaceIndex(tunAdapterName);
+    } on Object catch (error, stackTrace) {
+      _logger.warning(
+        _tag,
+        'Windows TUN interface index could not be resolved after route installation. Continuing with alias-based cleanup only.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _windowsTunInterfaceIndex = null;
+    }
+
     _windowsPrimaryGateway = primaryRoute.nextHop;
 
     _logger.info(
       _tag,
-      'Installed Windows TUN routes. tunIf=$tunInterfaceIndex, upstreamBypass=${upstreamAddresses.join(', ')}',
+      'Installed Windows TUN routes. tunAlias=$tunAdapterName, tunIf=${_windowsTunInterfaceIndex ?? 'unknown'}, upstreamBypass=${upstreamAddresses.join(', ')}',
     );
   }
 
@@ -543,12 +552,15 @@ class DesktopXrayRuntimeManager {
       return;
     }
 
+    const String tunAdapterName = 'alphawet';
+
     final int? tunInterfaceIndex = _windowsTunInterfaceIndex;
     if (tunInterfaceIndex != null) {
       await _runWindowsRouteDelete(
         <String>['DELETE', '0.0.0.0', 'MASK', '0.0.0.0', '0.0.0.0', 'IF', '$tunInterfaceIndex'],
       );
     }
+    await _runWindowsTunDefaultRouteDeleteByName(tunAdapterName);
 
     final String? primaryGateway = _windowsPrimaryGateway;
     if (primaryGateway != null) {
@@ -985,6 +997,84 @@ exit 1
     }
 
     _logger.warning(_tag, 'Failed to delete temporary Windows route: ${arguments.join(' ')}');
+  }
+
+  Future<void> _runWindowsTunDefaultRouteAddByName(String adapterName) async {
+    ProcessException? lastError;
+    for (int attempt = 0; attempt < 30; attempt += 1) {
+      final ProcessResult result = await Process.run(
+        'netsh',
+        <String>[
+          'interface',
+          'ipv4',
+          'add',
+          'route',
+          'prefix=0.0.0.0/0',
+          'interface=$adapterName',
+          'nexthop=0.0.0.0',
+          'metric=1',
+          'store=active',
+        ],
+        runInShell: false,
+      );
+      if (result.exitCode == 0) {
+        return;
+      }
+
+      lastError = ProcessException(
+        'netsh',
+        <String>[
+          'interface',
+          'ipv4',
+          'add',
+          'route',
+          'prefix=0.0.0.0/0',
+          'interface=$adapterName',
+          'nexthop=0.0.0.0',
+          'metric=1',
+          'store=active',
+        ],
+        '${result.stdout}\n${result.stderr}'.trim(),
+        result.exitCode,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+    }
+
+    throw lastError ??
+        ProcessException(
+          'netsh',
+          <String>[],
+          'Failed to add the temporary Windows TUN default route for interface "$adapterName".',
+          1,
+        );
+  }
+
+  Future<void> _runWindowsTunDefaultRouteDeleteByName(String adapterName) async {
+    final ProcessResult result = await Process.run(
+      'netsh',
+      <String>[
+        'interface',
+        'ipv4',
+        'delete',
+        'route',
+        'prefix=0.0.0.0/0',
+        'interface=$adapterName',
+        'store=active',
+      ],
+      runInShell: false,
+    );
+    if (result.exitCode == 0) {
+      return;
+    }
+
+    final String details = '${result.stdout}\n${result.stderr}'.toLowerCase();
+    if (details.contains('not found') ||
+        details.contains('no route was found') ||
+        details.contains('the system cannot find the file specified') ||
+        details.contains('element not found')) {
+      return;
+    }
   }
 
   Future<void> _deleteIfExists(File file) async {

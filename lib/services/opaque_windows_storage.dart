@@ -24,7 +24,7 @@ class OpaqueWindowsStorage {
   final X25519 _keyExchange = X25519();
   final AesGcm _cipher = AesGcm.with256bits();
 
-  bool get isAvailable => Platform.isWindows;
+  bool get isAvailable => true;
 
   Future<String?> readText(String logicalKey) async {
     final File file = await _dataFile(logicalKey);

@@ -32,6 +32,15 @@ class DesktopXrayRuntimeManager {
   String? _windowsTunObservedIpv4;
   final Set<String> _windowsTunBypassAddresses = <String>{};
 
+  static String get _windowsSystemRoot =>
+      Platform.environment['SystemRoot'] ?? r'C:\Windows';
+
+  static String get _windowsPowerShellPath =>
+      '$_windowsSystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+
+  static String get _windowsRoutePath =>
+      '$_windowsSystemRoot\\System32\\route.exe';
+
   bool get isSupportedDesktop => Platform.isWindows || Platform.isLinux;
 
   bool get isRunning => _process != null;
@@ -716,7 +725,7 @@ Write-Output ("{0}|{1}" -f ([int]$route.InterfaceIndex), ([string]$route.NextHop
 ''';
 
     final ProcessResult cimResult = await Process.run(
-      'powershell',
+      _windowsPowerShellPath,
       <String>['-NoProfile', '-Command', cimRouteScript],
       runInShell: false,
     );
@@ -730,13 +739,13 @@ Write-Output ("{0}|{1}" -f ([int]$route.InterfaceIndex), ([string]$route.NextHop
     }
 
     final ProcessResult routePrintResult = await Process.run(
-      'route',
+      _windowsRoutePath,
       <String>['print', '-4'],
       runInShell: false,
     );
     if (routePrintResult.exitCode != 0) {
       throw ProcessException(
-        'route',
+        _windowsRoutePath,
         <String>['print', '-4'],
         '${routePrintResult.stdout}\n${routePrintResult.stderr}',
         routePrintResult.exitCode,
@@ -914,7 +923,7 @@ exit 1
       final String observedIp = (_windowsTunObservedIpv4 ?? '').replaceAll("'", "''");
       final String command = adapterLookupScript.replaceAll('__OBSERVED_IP__', observedIp);
       final ProcessResult result = await Process.run(
-        'powershell',
+        _windowsPowerShellPath,
         <String>[
           '-NoProfile',
           '-Command',
@@ -939,7 +948,7 @@ exit 1
         ? ' No TUN IPv4 address was observed from the Xray runtime logs.'
         : ' Observed TUN IPv4: ${_windowsTunObservedIpv4!}.';
     throw ProcessException(
-      'powershell',
+      _windowsPowerShellPath,
       <String>[],
       'Timed out while waiting for the Windows TUN adapter "$adapterName" to appear.$observedIpDetails',
       1,
@@ -952,7 +961,7 @@ exit 1
     }
 
     final ProcessResult result = await Process.run(
-      'powershell',
+      _windowsPowerShellPath,
       <String>[
         '-NoProfile',
         '-Command',
@@ -964,7 +973,7 @@ exit 1
   }
 
   Future<void> _runWindowsRoute(List<String> arguments) async {
-    final ProcessResult result = await Process.run('route', arguments, runInShell: false);
+    final ProcessResult result = await Process.run(_windowsRoutePath, arguments, runInShell: false);
     if (result.exitCode == 0) {
       return;
     }
@@ -973,18 +982,18 @@ exit 1
     final String normalized = details.toLowerCase();
     if (normalized.contains('requires elevation') || normalized.contains('access is denied')) {
       throw ProcessException(
-        'route',
+        _windowsRoutePath,
         arguments,
         'Windows TUN mode needs Administrator privileges so AlphaWet can install temporary routes.\n$details',
         result.exitCode,
       );
     }
 
-    throw ProcessException('route', arguments, details, result.exitCode);
+    throw ProcessException(_windowsRoutePath, arguments, details, result.exitCode);
   }
 
   Future<void> _runWindowsRouteDelete(List<String> arguments) async {
-    final ProcessResult result = await Process.run('route', arguments, runInShell: false);
+    final ProcessResult result = await Process.run(_windowsRoutePath, arguments, runInShell: false);
     if (result.exitCode == 0) {
       return;
     }

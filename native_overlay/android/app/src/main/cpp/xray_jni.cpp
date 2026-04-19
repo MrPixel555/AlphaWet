@@ -194,8 +194,13 @@ jboolean nativeStop(
         return JNI_FALSE;
     }
 
+    int status = 0;
     for (int i = 0; i < 20; ++i) {
-        if (kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH) {
+        const pid_t wait_result = waitpid(static_cast<pid_t>(pid), &status, WNOHANG);
+        if (wait_result == static_cast<pid_t>(pid)) {
+            return JNI_TRUE;
+        }
+        if (wait_result < 0 && errno == ECHILD) {
             return JNI_TRUE;
         }
         usleep(100 * 1000);
@@ -203,6 +208,16 @@ jboolean nativeStop(
 
     if (kill(static_cast<pid_t>(pid), SIGKILL) != 0 && errno != ESRCH) {
         return JNI_FALSE;
+    }
+    for (int i = 0; i < 10; ++i) {
+        const pid_t wait_result = waitpid(static_cast<pid_t>(pid), &status, WNOHANG);
+        if (wait_result == static_cast<pid_t>(pid)) {
+            return JNI_TRUE;
+        }
+        if (wait_result < 0 && errno == ECHILD) {
+            return JNI_TRUE;
+        }
+        usleep(100 * 1000);
     }
     return JNI_TRUE;
 }
@@ -213,6 +228,17 @@ jboolean nativeIsRunning(
     jlong pid
 ) {
     if (pid <= 0) {
+        return JNI_FALSE;
+    }
+    int status = 0;
+    const pid_t wait_result = waitpid(static_cast<pid_t>(pid), &status, WNOHANG);
+    if (wait_result == static_cast<pid_t>(pid)) {
+        return JNI_FALSE;
+    }
+    if (wait_result < 0) {
+        if (errno == ECHILD || errno == ESRCH) {
+            return JNI_FALSE;
+        }
         return JNI_FALSE;
     }
     if (kill(static_cast<pid_t>(pid), 0) == 0) {

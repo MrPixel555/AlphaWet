@@ -44,7 +44,7 @@ class XrayCoreVpnEngine implements VpnEngine {
           'enableDeviceVpn': runtimeSettings.enableDeviceVpn,
         },
       );
-      return _normalizeValidateResult(_fromChannel(raw));
+      return _fromChannel(raw);
     } on MissingPluginException {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,
@@ -97,7 +97,7 @@ class XrayCoreVpnEngine implements VpnEngine {
           'enableDeviceVpn': runtimeSettings.enableDeviceVpn,
         },
       );
-      return _normalizeConnectResult(_fromChannel(raw));
+      return _fromChannel(raw);
     } on MissingPluginException {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,
@@ -131,7 +131,7 @@ class XrayCoreVpnEngine implements VpnEngine {
           'configId': entry.id,
         },
       );
-      return _normalizeDisconnectResult(_fromChannel(raw));
+      return _fromChannel(raw);
     } on MissingPluginException {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,
@@ -146,43 +146,6 @@ class XrayCoreVpnEngine implements VpnEngine {
         message: error.message ?? 'Failed to stop Android Xray runtime.',
       );
     }
-  }
-
-
-  VpnEngineResult _normalizeValidateResult(VpnEngineResult result) {
-    if (!result.success || result.state != VpnConnectionState.failed) {
-      return result;
-    }
-    return VpnEngineResult(
-      state: VpnConnectionState.ready,
-      success: true,
-      message: result.message,
-      sessionId: result.sessionId,
-    );
-  }
-
-  VpnEngineResult _normalizeConnectResult(VpnEngineResult result) {
-    if (!result.success || result.state != VpnConnectionState.failed) {
-      return result;
-    }
-    return VpnEngineResult(
-      state: VpnConnectionState.connected,
-      success: true,
-      message: result.message,
-      sessionId: result.sessionId,
-    );
-  }
-
-  VpnEngineResult _normalizeDisconnectResult(VpnEngineResult result) {
-    if (!result.success || result.state != VpnConnectionState.failed) {
-      return result;
-    }
-    return VpnEngineResult(
-      state: VpnConnectionState.idle,
-      success: true,
-      message: result.message,
-      sessionId: null,
-    );
   }
 
   VpnEngineResult _fromChannel(Map<Object?, Object?>? payload) {

@@ -3,11 +3,26 @@ package com.awmanager.ui
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import android.os.Bundle
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE,
+        )
+        runCatching {
+            RuntimeSecurityGuard.enforceRuntimeSecurity(applicationContext)
+        }.onFailure {
+            finishAffinity()
+        }
+    }
+
     private lateinit var bridge: XrayCoreRuntimeBridge
     private var pendingVpnPermissionResult: MethodChannel.Result? = null
     private val vpnPermissionRequestCode = 9912

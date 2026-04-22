@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="${1:-.}"
 OVERLAY_KT_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/kotlin/com/awmanager/ui"
 OVERLAY_CPP_DIR="${ROOT_DIR}/native_overlay/android/app/src/main/cpp"
+OVERLAY_APP_DIR="${ROOT_DIR}/native_overlay/android/app"
 ANDROID_DIR="${ROOT_DIR}/android"
 JNI_LIBS_DIR="${ANDROID_DIR}/app/src/main/jniLibs"
 CPP_TARGET_DIR="${ANDROID_DIR}/app/src/main/cpp"
@@ -40,6 +41,11 @@ for src in "${OVERLAY_KT_DIR}"/*.kt; do
 done
 
 echo "[OK] Applied Kotlin overlay to ${TARGET_KT_DIR}"
+
+if [ -f "${OVERLAY_APP_DIR}/proguard-rules.pro" ]; then
+  cp -f "${OVERLAY_APP_DIR}/proguard-rules.pro" "${ANDROID_DIR}/app/proguard-rules.pro"
+  echo "[OK] Applied Android obfuscation rules to ${ANDROID_DIR}/app/proguard-rules.pro"
+fi
 
 mkdir -p "${CPP_TARGET_DIR}"
 for src in "${OVERLAY_CPP_DIR}"/*; do
@@ -114,6 +120,7 @@ BUILD_GROOVY="${ANDROID_DIR}/app/build.gradle"
 if [ -f "${BUILD_KTS}" ]; then
   python3 - <<'PY' "${BUILD_KTS}"
 from pathlib import Path
+import re
 import sys
 path = Path(sys.argv[1])
 text = path.read_text()
@@ -123,9 +130,27 @@ if 'externalNativeBuild {' not in text:
         'android {\n    externalNativeBuild {\n        cmake {\n            path = file("src/main/cpp/CMakeLists.txt")\n        }\n    }\n    packaging {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n',
         1,
     )
+if 'isMinifyEnabled = true' not in text and 'buildTypes {' in text:
+    text = text.replace(
+        'buildTypes {\n',
+        'buildTypes {\n        getByName("release") {\n            isMinifyEnabled = true\n            isShrinkResources = true\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")\n        }\n',
+        1,
+    )
+if 'buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
+    text = text.replace(
+        'defaultConfig {\n',
+        'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n',
+        1,
+    )
+if 'buildFeatures {' in text and 'buildConfig = true' not in text:
+    text = text.replace('buildFeatures {\n', 'buildFeatures {\n        buildConfig = true\n', 1)
+elif 'buildFeatures {' not in text:
+    text = text.replace('android {\n', 'android {\n    buildFeatures {\n        buildConfig = true\n    }\n', 1)
+if 'com.google.android.play:integrity' not in text:
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0")\n}\n'
 path.write_text(text)
 PY
-  echo "[OK] Patched build.gradle.kts for JNI/CMake packaging"
+  echo "[OK] Patched build.gradle.kts for JNI/CMake packaging + obfuscation + Play Integrity"
 elif [ -f "${BUILD_GROOVY}" ]; then
   python3 - <<'PY' "${BUILD_GROOVY}"
 from pathlib import Path
@@ -138,9 +163,23 @@ if 'externalNativeBuild {' not in text:
         'android {\n    externalNativeBuild {\n        cmake {\n            path file("src/main/cpp/CMakeLists.txt")\n        }\n    }\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n    }\n',
         1,
     )
+if 'minifyEnabled true' not in text and 'buildTypes {' in text:
+    text = text.replace(
+        'buildTypes {\n',
+        'buildTypes {\n        release {\n            minifyEnabled true\n            shrinkResources true\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\n        }\n',
+        1,
+    )
+if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
+    text = text.replace(
+        'defaultConfig {\n',
+        'defaultConfig {\n        def playCloudProjectNumber = project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") ?: "0"\n        buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L"\n',
+        1,
+    )
+if 'com.google.android.play:integrity' not in text:
+    text += '\n\ndependencies {\n    implementation "com.google.android.play:integrity:1.4.0"\n}\n'
 path.write_text(text)
 PY
-  echo "[OK] Patched build.gradle for JNI/CMake packaging"
+  echo "[OK] Patched build.gradle for JNI/CMake packaging + obfuscation + Play Integrity"
 else
   echo "[WARN] No build.gradle(.kts) found to patch automatically."
 fi

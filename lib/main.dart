@@ -710,6 +710,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final Map<Object?, Object?>? status = await RuntimeBridge.getCoreStatus();
     final String state = (status?['state'] as String? ?? 'idle').trim().toLowerCase();
     if (state == 'running') {
+      final _TrafficFromStatus traffic = _trafficFromStatus(status);
+      final ConfigEntry latest = _findEntryById(active.id) ?? active;
+      if (traffic.upBytes > latest.uploadBytes || traffic.downBytes > latest.downloadBytes) {
+        _setEntry(
+          latest.id,
+          latest.copyWith(
+            uploadBytes: traffic.upBytes > latest.uploadBytes ? traffic.upBytes : latest.uploadBytes,
+            downloadBytes: traffic.downBytes > latest.downloadBytes ? traffic.downBytes : latest.downloadBytes,
+          ),
+        );
+        await _persistConfigs();
+      }
       return;
     }
     _isRecoveringRuntime = true;

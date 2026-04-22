@@ -2,6 +2,7 @@ package com.awmanager.ui
 
 import android.content.Context
 import android.content.Intent
+import android.net.TrafficStats
 import android.os.Build
 import io.flutter.plugin.common.MethodCall
 import java.io.File
@@ -27,6 +28,8 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     fun startCore(call: MethodCall): Map<String, Any?> {
+        RuntimeSecurityGuard.enforceRuntimeSecurity(context)
+        PlayIntegrityVerifier.requireStrongIntegrity(context)
         val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
         requestVpnServiceStop()
         requestProxyServiceStop()
@@ -114,7 +117,8 @@ class XrayCoreRuntimeBridge(private val context: Context) {
     }
 
     fun pingProxy(call: MethodCall): Map<String, Any?> {
-        val url = "https://www.google.com/generate_204"
+        val url = call.argument<String>("url")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: "https://www.google.com/generate_204"
         val httpPort = call.argument<Int>("httpPort") ?: 10808
         val socksPort = call.argument<Int>("socksPort") ?: 10809
         val configJson = call.argument<String>("configJson")?.trim().takeUnless { it.isNullOrEmpty() }
@@ -369,6 +373,8 @@ object XrayCoreRuntimeManager {
     private var currentHttpPort: Int = 10808
     private var currentSocksPort: Int = 10809
     private var currentDeviceVpnMode: Boolean = false
+    private var trafficBaseTxBytes: Long = 0L
+    private var trafficBaseRxBytes: Long = 0L
 
     fun validate(bundle: RuntimeBundle): Map<String, Any?> {
         val exitCode = XrayNativeBridge.validate(
@@ -496,6 +502,8 @@ object XrayCoreRuntimeManager {
         currentSocksPort = bundle.socksPort
         currentDeviceVpnMode = bundle.enableDeviceVpn
         lastLogFile = bundle.logFile
+        trafficBaseTxBytes = appTxBytes()
+        trafficBaseRxBytes = appRxBytes()
         lastState = "running"
         lastMessage = if (bundle.enableDeviceVpn) {
             "AlphaWet full-device tunnel is active. HTTP 127.0.0.1:${bundle.httpPort}, SOCKS 127.0.0.1:${bundle.socksPort}."
@@ -556,6 +564,11 @@ object XrayCoreRuntimeManager {
                 lastMessage = "Xray core stopped unexpectedly."
             }
         }
+        val tx = appTxBytes()
+        val rx = appRxBytes()
+        val upBytes = (tx - trafficBaseTxBytes).coerceAtLeast(0L)
+        val downBytes = (rx - trafficBaseRxBytes).coerceAtLeast(0L)
+
         mapOf(
             "state" to if (running) "running" else lastState,
             "success" to (running || lastState != "error"),
@@ -566,6 +579,10 @@ object XrayCoreRuntimeManager {
             "httpPort" to currentHttpPort,
             "socksPort" to currentSocksPort,
             "deviceVpnMode" to currentDeviceVpnMode,
+            "upBytes" to upBytes,
+            "downBytes" to downBytes,
+            "uploadBytes" to upBytes,
+            "downloadBytes" to downBytes,
             "logFilePath" to lastLogFile?.absolutePath,
         )
     }
@@ -712,6 +729,8 @@ object XrayCoreRuntimeManager {
         currentHttpPort = 10808
         currentSocksPort = 10809
         currentDeviceVpnMode = false
+        trafficBaseTxBytes = appTxBytes()
+        trafficBaseRxBytes = appRxBytes()
     }
 
     private fun waitForLoopbackListener(port: Int, timeoutMs: Long): Boolean {
@@ -731,6 +750,16 @@ object XrayCoreRuntimeManager {
             }
         }
         return false
+    }
+
+    private fun appTxBytes(): Long {
+        val tx = TrafficStats.getUidTxBytes(android.os.Process.myUid())
+        return if (tx < 0L) 0L else tx
+    }
+
+    private fun appRxBytes(): Long {
+        val rx = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+        return if (rx < 0L) 0L else rx
     }
 
     private fun tailLog(file: File, maxChars: Int = 4_000): String {

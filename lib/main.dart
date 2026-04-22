@@ -114,14 +114,6 @@ extension on ThemePreference {
       };
 }
 
-extension on ThemeMode {
-  ThemePreference get toPreference => switch (this) {
-        ThemeMode.light => ThemePreference.light,
-        ThemeMode.dark => ThemePreference.dark,
-        ThemeMode.system => ThemePreference.system,
-      };
-}
-
 extension on ThemePreference {
   String get storageValue => name;
 }

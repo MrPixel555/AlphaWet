@@ -10,6 +10,7 @@ jobs:
     env:
       BUILD_ROOT: /tmp/alphawet
       AW_INCLUDE_X86_64: '1'
+      ORG_GRADLE_PROJECT_PLAY_CLOUD_PROJECT_NUMBER: ${{ secrets.AW_PLAY_CLOUD_PROJECT_NUMBER }}
 
     steps:
       - name: Checkout repository
@@ -40,11 +41,13 @@ jobs:
           AW_ANDROID_KEY_PASSWORD: ${{ secrets.AW_ANDROID_KEY_PASSWORD }}
           AW_ANDROID_KEY_ALIAS: ${{ secrets.AW_ANDROID_KEY_ALIAS }}
           AW_EXPECTED_SIGNING_CERT_SHA256: ${{ secrets.AW_EXPECTED_SIGNING_CERT_SHA256 }}
+          AW_PLAY_CLOUD_PROJECT_NUMBER: ${{ secrets.AW_PLAY_CLOUD_PROJECT_NUMBER }}
         run: |
           test -n "$AW_ANDROID_KEYSTORE_BASE64"
           test -n "$AW_ANDROID_KEYSTORE_PASSWORD"
           test -n "$AW_ANDROID_KEY_ALIAS"
           test -n "$AW_EXPECTED_SIGNING_CERT_SHA256"
+          test -n "$AW_PLAY_CLOUD_PROJECT_NUMBER"
 
       - name: Prepare Android project for CI
         env:

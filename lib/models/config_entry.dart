@@ -33,6 +33,8 @@ class ConfigEntry {
     this.engineSessionId,
     this.lastValidatedAt,
     this.lastConnectedAt,
+    this.uploadBytes = 0,
+    this.downloadBytes = 0,
   });
 
   final String id;
@@ -63,6 +65,8 @@ class ConfigEntry {
   final String? engineSessionId;
   final DateTime? lastValidatedAt;
   final DateTime? lastConnectedAt;
+  final int uploadBytes;
+  final int downloadBytes;
 
   bool get isXrayReady => xrayConfigJson != null && xrayBuildError == null;
   bool get isBusy => connectionState.isBusy;
@@ -96,6 +100,8 @@ class ConfigEntry {
     Object? engineSessionId = _unset,
     Object? lastValidatedAt = _unset,
     Object? lastConnectedAt = _unset,
+    int? uploadBytes,
+    int? downloadBytes,
   }) {
     return ConfigEntry(
       id: id ?? this.id,
@@ -140,6 +146,8 @@ class ConfigEntry {
       lastConnectedAt: identical(lastConnectedAt, _unset)
           ? this.lastConnectedAt
           : lastConnectedAt as DateTime?,
+      uploadBytes: uploadBytes ?? this.uploadBytes,
+      downloadBytes: downloadBytes ?? this.downloadBytes,
     );
   }
 }

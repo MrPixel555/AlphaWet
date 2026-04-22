@@ -92,7 +92,7 @@ class RuntimeBridge {
       if (configJson == null || configJson.trim().isEmpty) {
         return <Object?, Object?>{
           'success': false,
-          'message': 'Ping is unavailable because the desktop Xray config is empty.',
+          'message': 'Ping is unavailable because the desktop runtime config is empty.',
         };
       }
 
@@ -110,7 +110,7 @@ class RuntimeBridge {
         if (normalizedConfigJson == null) {
           return <Object?, Object?>{
             'success': false,
-            'message': 'Ping is unavailable because the Xray config could not be normalized.',
+            'message': 'Ping is unavailable because the runtime config could not be normalized.',
           };
         }
 

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'models/aw_profile_models.dart';
@@ -21,6 +23,8 @@ import 'services/aw_xray_builder_exception.dart';
 import 'services/aw_xray_config_builder.dart';
 import 'services/runtime_settings_store.dart';
 import 'widgets/config_card.dart';
+
+final ValueNotifier<ThemeMode> appThemeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.system);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -71,28 +75,127 @@ class AwManagerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color seed = const Color(0xFF3569F6);
 
-    return MaterialApp(
-      title: 'AlphaWet',
-      debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.system,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: seed),
-        scaffoldBackgroundColor: const Color(0xFFF6F8FC),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      home: HomeScreen(
-        disableStartupSideEffects: disableStartupSideEffects,
-        enableWindowsPortraitFrame: enableWindowsPortraitFrame,
-      ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeModeNotifier,
+      builder: (BuildContext context, ThemeMode mode, Widget? child) {
+        return MaterialApp(
+          title: 'AlphaWet',
+          debugShowCheckedModeBanner: false,
+          themeMode: mode,
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: seed),
+            scaffoldBackgroundColor: const Color(0xFFF6F8FC),
+            useMaterial3: true,
+          ),
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seed,
+              brightness: Brightness.dark,
+            ),
+            useMaterial3: true,
+          ),
+          home: HomeScreen(
+            disableStartupSideEffects: disableStartupSideEffects,
+            enableWindowsPortraitFrame: enableWindowsPortraitFrame,
+          ),
+        );
+      },
     );
   }
+}
+
+enum ThemePreference { system, light, dark }
+
+extension on ThemePreference {
+  ThemeMode get toThemeMode => switch (this) {
+        ThemePreference.system => ThemeMode.system,
+        ThemePreference.light => ThemeMode.light,
+        ThemePreference.dark => ThemeMode.dark,
+      };
+}
+
+extension on ThemeMode {
+  ThemePreference get toPreference => switch (this) {
+        ThemeMode.light => ThemePreference.light,
+        ThemeMode.dark => ThemePreference.dark,
+        ThemeMode.system => ThemePreference.system,
+      };
+}
+
+extension on ThemePreference {
+  String get storageValue => name;
+}
+
+ThemePreference _themePreferenceFromStorage(String? value) {
+  return switch ((value ?? '').trim().toLowerCase()) {
+    'light' => ThemePreference.light,
+    'dark' => ThemePreference.dark,
+    _ => ThemePreference.system,
+  };
+}
+
+class _TrafficTotals {
+  const _TrafficTotals({required this.uploadBytes, required this.downloadBytes});
+
+  final int uploadBytes;
+  final int downloadBytes;
+}
+
+class _TrafficFromStatus {
+  const _TrafficFromStatus({required this.upBytes, required this.downBytes});
+
+  final int upBytes;
+  final int downBytes;
+}
+
+String _formatBytes(int bytes) {
+  if (bytes <= 0) {
+    return '0 B';
+  }
+  const List<String> units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+  double size = bytes.toDouble();
+  int unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  final String text = size >= 10 ? size.toStringAsFixed(0) : size.toStringAsFixed(1);
+  return '$text ${units[unitIndex]}';
+}
+
+int _toInt(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  if (value is String) {
+    return int.tryParse(value) ?? 0;
+  }
+  return 0;
+}
+
+_TrafficFromStatus _trafficFromStatus(Map<Object?, Object?>? status) {
+  if (status == null) {
+    return const _TrafficFromStatus(upBytes: 0, downBytes: 0);
+  }
+  int up = 0;
+  int down = 0;
+  up = _toInt(status['upBytes']) + _toInt(status['uplink']) + _toInt(status['uploadBytes']);
+  down = _toInt(status['downBytes']) + _toInt(status['downlink']) + _toInt(status['downloadBytes']);
+  final Object? traffic = status['traffic'];
+  if (traffic is Map<Object?, Object?>) {
+    up = up == 0 ? (_toInt(traffic['up']) + _toInt(traffic['uplink']) + _toInt(traffic['upload'])) : up;
+    down = down == 0
+        ? (_toInt(traffic['down']) + _toInt(traffic['downlink']) + _toInt(traffic['download']))
+        : down;
+  }
+  return _TrafficFromStatus(upBytes: up, downBytes: down);
+}
+
+String _sanitizeXrayText(String value) {
+  return value.replaceAll(RegExp('xray', caseSensitive: false), 'core');
 }
 
 class HomeScreen extends StatefulWidget {
@@ -125,6 +228,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoadingRuntimeSettings = true;
   bool _configsLoaded = false;
   bool _isRestoringRuntimeState = false;
+  ThemePreference _themePreference = ThemePreference.system;
   RuntimeSettings _runtimeSettings = Platform.isAndroid || Platform.isWindows
       ? RuntimeSettings.defaults
       : const RuntimeSettings(mode: RuntimeMode.proxy);
@@ -139,6 +243,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _runtimeSettingsStore = RuntimeSettingsStore();
     _configStore = ConfigStore();
     _vpnEngine = createVpnEngine(logger: _logger);
+    _loadThemePreference();
     if (widget.disableStartupSideEffects) {
       _isLoadingRuntimeSettings = false;
       return;
@@ -165,6 +270,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool get _preferTunLabel => Platform.isWindows;
 
   String get _deviceTunnelLabel => _preferTunLabel ? 'TUN' : 'VPN';
+  _TrafficTotals get _trafficTotals {
+    int upload = 0;
+    int download = 0;
+    for (final ConfigEntry entry in _configs) {
+      upload += entry.uploadBytes;
+      download += entry.downloadBytes;
+    }
+    return _TrafficTotals(uploadBytes: upload, downloadBytes: download);
+  }
+
+  bool _isDarkTheme(BuildContext context) {
+    if (_themePreference == ThemePreference.dark) {
+      return true;
+    }
+    if (_themePreference == ThemePreference.light) {
+      return false;
+    }
+    return MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+  }
+
+  Future<void> _loadThemePreference() async {
+    final File file = await _themePreferenceFile();
+    if (!await file.exists()) {
+      appThemeModeNotifier.value = ThemeMode.system;
+      return;
+    }
+    try {
+      final Map<String, dynamic> payload =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final ThemePreference pref = _themePreferenceFromStorage(payload['theme'] as String?);
+      _themePreference = pref;
+      appThemeModeNotifier.value = pref.toThemeMode;
+    } catch (_) {
+      _themePreference = ThemePreference.system;
+      appThemeModeNotifier.value = ThemeMode.system;
+    }
+  }
+
+  Future<File> _themePreferenceFile() async {
+    final String base = (await getApplicationSupportDirectory()).path;
+    final Directory dir = Directory('$base${Platform.pathSeparator}ui');
+    await dir.create(recursive: true);
+    return File('${dir.path}${Platform.pathSeparator}theme_pref.json');
+  }
+
+  Future<void> _toggleTheme() async {
+    final ThemePreference next = _isDarkTheme(context) ? ThemePreference.light : ThemePreference.dark;
+    setState(() {
+      _themePreference = next;
+    });
+    appThemeModeNotifier.value = next.toThemeMode;
+    final File file = await _themePreferenceFile();
+    await file.writeAsString(jsonEncode(<String, dynamic>{'theme': next.storageValue}), flush: true);
+  }
 
   Future<void> _loadRuntimeSettings() async {
     try {
@@ -279,8 +438,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       final String message = entry.isXrayReady
-          ? '${file.name} imported. ${_runtimeSettings.proxySummary} is now embedded into the generated Xray config.'
-          : '${file.name} imported, but Xray JSON build failed.';
+          ? '${file.name} imported. ${_runtimeSettings.proxySummary} is now embedded into the generated runtime config.'
+          : '${file.name} imported, but Core JSON build failed.';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     } on AwImportException catch (error, stackTrace) {
       _logger.warning(
@@ -325,6 +484,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required String importStatus,
     required String payloadKind,
     required bool isSecureEnvelope,
+    int uploadBytes = 0,
+    int downloadBytes = 0,
   }) {
     String xrayBuildStatus = 'Ready';
     String? xrayConfigJson;
@@ -343,16 +504,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       xrayBuildError = error.message;
       _logger.warning(
         'HomeScreen',
-        'Xray build rejected for ${profile.displayName}: ${error.message}',
+        'Core build rejected for ${profile.displayName}: ${error.message}',
         error: error,
         stackTrace: stackTrace,
       );
     } catch (error, stackTrace) {
       xrayBuildStatus = 'Build failed';
-      xrayBuildError = 'Unexpected Xray build failure.';
+      xrayBuildError = 'Unexpected Core build failure.';
       _logger.error(
         'HomeScreen',
-        'Unexpected Xray build failure for ${profile.displayName}.',
+        'Unexpected Core build failure for ${profile.displayName}.',
         error: error,
         stackTrace: stackTrace,
       );
@@ -381,8 +542,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       xrayBuildError: xrayBuildError,
       connectionState: xrayConfigJson != null ? VpnConnectionState.ready : VpnConnectionState.failed,
       engineMessage: xrayConfigJson != null
-          ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
-          : (xrayBuildError ?? 'Xray build failed.'),
+          ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
+          : (xrayBuildError ?? 'Core build failed.'),
+      uploadBytes: uploadBytes,
+      downloadBytes: downloadBytes,
     );
   }
 
@@ -409,6 +572,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               importStatus: item.importStatus,
               payloadKind: item.payloadKind,
               isSecureEnvelope: item.isSecureEnvelope,
+              uploadBytes: item.uploadBytes,
+              downloadBytes: item.downloadBytes,
             ),
           )
           .toList(growable: false);
@@ -435,8 +600,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final bool running = state == 'running' && status?['success'] == true;
       final String? activeConfigId = (status?['configId'] as String?)?.trim();
       final String? sessionId = (status?['sessionId'] as String?)?.trim();
-      final String message = (status?['message'] as String? ?? '').trim();
+      final String message = _sanitizeXrayText((status?['message'] as String? ?? '').trim());
       final bool deviceVpnMode = status?['deviceVpnMode'] == true;
+      final _TrafficFromStatus traffic = _trafficFromStatus(status);
 
       if (!mounted) {
         return;
@@ -459,15 +625,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ? 'AlphaWet $_deviceTunnelLabel session is already active.'
                       : 'AlphaWet proxy session is already active.'))
               : (item.isXrayReady
-                  ? 'Xray JSON built with ${_runtimeSettings.proxySummary}.'
-                  : (item.xrayBuildError ?? 'Xray build failed.')),
+                  ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
+                  : (item.xrayBuildError ?? 'Core build failed.')),
           lastConnectedAt: isActive ? (item.lastConnectedAt ?? DateTime.now()) : item.lastConnectedAt,
+          uploadBytes: isActive ? (traffic.upBytes > item.uploadBytes ? traffic.upBytes : item.uploadBytes) : item.uploadBytes,
+          downloadBytes: isActive
+              ? (traffic.downBytes > item.downloadBytes ? traffic.downBytes : item.downloadBytes)
+              : item.downloadBytes,
         );
         if (next.isEnabled != item.isEnabled ||
             next.connectionState != item.connectionState ||
             next.engineSessionId != item.engineSessionId ||
             next.engineMessage != item.engineMessage ||
-            next.lastConnectedAt != item.lastConnectedAt) {
+            next.lastConnectedAt != item.lastConnectedAt ||
+            next.uploadBytes != item.uploadBytes ||
+            next.downloadBytes != item.downloadBytes) {
           configsChanged = true;
         }
         updated.add(next);
@@ -517,6 +689,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             importStatus: item.importStatus,
             payloadKind: item.payloadKind,
             isSecureEnvelope: item.isSecureEnvelope,
+            uploadBytes: item.uploadBytes,
+            downloadBytes: item.downloadBytes,
           ),
         )
         .toList(growable: false);
@@ -732,6 +906,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _clearBusyPortsOnWindows(List<int> ports) async {
+    if (!Platform.isWindows || ports.isEmpty) {
+      return;
+    }
+    for (final int port in ports.toSet()) {
+      try {
+        final ProcessResult netstat = await Process.run(
+          'cmd',
+          <String>['/c', 'netstat -ano -p tcp | findstr :$port'],
+        );
+        if (netstat.exitCode != 0) {
+          continue;
+        }
+        final List<String> lines = '${netstat.stdout}'.split('\n');
+        for (final String line in lines) {
+          final String trimmed = line.trim();
+          if (trimmed.isEmpty) {
+            continue;
+          }
+          final List<String> parts = trimmed.split(RegExp(r'\s+'));
+          if (parts.isEmpty) {
+            continue;
+          }
+          final int? pid = int.tryParse(parts.last);
+          if (pid == null || pid <= 0) {
+            continue;
+          }
+          await Process.run('taskkill', <String>['/PID', '$pid', '/F']);
+        }
+      } catch (_) {
+        // Best effort on Windows.
+      }
+    }
+  }
+
   Future<void> _toggleConfig(String id, bool value) async {
     final ConfigEntry? current = _findEntryById(id);
     if (current == null || current.isBusy) {
@@ -743,7 +952,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         id,
         current.copyWith(
           connectionState: VpnConnectionState.disconnecting,
-          engineMessage: 'Stopping Xray core...',
+          engineMessage: 'Stopping runtime core...',
         ),
       );
       final VpnEngineResult result = await _vpnEngine.disconnect(current);
@@ -788,7 +997,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     await _disconnectOtherConfigs(id);
 
-    final List<int> busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+    List<int> busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+    if (Platform.isWindows && busyPorts.isNotEmpty) {
+      await _clearBusyPortsOnWindows(busyPorts);
+      busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+    }
     if (busyPorts.isNotEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -822,8 +1035,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       refreshedCurrent.copyWith(
         connectionState: VpnConnectionState.validating,
         engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Validating generated Xray config for $_deviceTunnelLabel mode...'
-            : 'Validating generated Xray config for Proxy mode...',
+            ? 'Validating generated runtime config for $_deviceTunnelLabel mode...'
+            : 'Validating generated runtime config for Proxy mode...',
       ),
     );
     final ConfigEntry validateTarget = _findEntryById(id) ?? current;
@@ -1092,6 +1305,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         centerTitle: false,
         actions: <Widget>[
           IconButton(
+            tooltip: 'Toggle theme',
+            onPressed: _toggleTheme,
+            icon: Icon(_isDarkTheme(context) ? Icons.wb_sunny_rounded : Icons.dark_mode_rounded),
+          ),
+          IconButton(
             tooltip: 'Import config',
             onPressed: _isImporting ? null : _importConfig,
             icon: const Icon(Icons.add_link_rounded),
@@ -1123,38 +1341,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
       bottomNavigationBar: BottomAppBar(
-        height: 108,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Row(
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: _previewLogs,
-                    icon: const Icon(Icons.receipt_long_outlined),
-                    label: const Text('Preview Logs'),
-                  ),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: _previewLogs,
+                        icon: const Icon(Icons.receipt_long_outlined),
+                        label: const Text('Preview Logs'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _isExportingLogs ? null : _exportLogs,
+                        icon: _isExportingLogs
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.save_alt_rounded),
+                        label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _isExportingLogs ? null : _exportLogs,
-                    icon: _isExportingLogs
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.save_alt_rounded),
-                    label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
-                  ),
+                const SizedBox(height: 8),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    _logger.clear();
+                    if (!mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Logs cleared.')),
+                    );
+                  },
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: const Text('Clear Logs'),
                 ),
+                const SizedBox(height: 8),
+                const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
               ],
             ),
-            const SizedBox(height: 8),
-            const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
-          ],
+          ),
         ),
       ),
       body: SafeArea(
@@ -1236,14 +1474,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   value: '${_configs.length}',
                                 ),
                                 _MetricChip(
-                                  icon: Icons.http_rounded,
-                                  label: 'HTTP',
-                                  value: '${_runtimeSettings.httpPort}',
+                                  icon: Icons.upload_rounded,
+                                  label: 'Upload',
+                                  value: _formatBytes(_trafficTotals.uploadBytes),
                                 ),
                                 _MetricChip(
-                                  icon: Icons.route_rounded,
-                                  label: 'SOCKS',
-                                  value: '${_runtimeSettings.socksPort}',
+                                  icon: Icons.download_rounded,
+                                  label: 'Download',
+                                  value: _formatBytes(_trafficTotals.downloadBytes),
                                 ),
                                 _MetricChip(
                                   icon: Icons.vpn_lock_outlined,
@@ -1580,7 +1818,7 @@ class _RuntimeSettingsSheetState extends State<_RuntimeSettingsSheet> {
                           ? (proxyMode
                               ? 'Proxy mode starts the local listeners and uses the ports below.'
                               : 'TUN mode starts the Windows TUN profile and still keeps the local listeners available for diagnostics and status checks.')
-                          : 'Desktop builds use the local Xray proxy runtime. VPN mode remains available on Android and Windows builds only.',
+                          : 'Desktop builds use the local proxy runtime. VPN mode remains available on Android and Windows builds only.',
                   style: theme.textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ],
@@ -1659,9 +1897,7 @@ class _AlphaWetTitle extends StatelessWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
 
     return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool compact = constraints.maxWidth.isFinite && constraints.maxWidth < 190;
-
+      builder: (BuildContext context, BoxConstraints _) {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -1672,16 +1908,25 @@ class _AlphaWetTitle extends StatelessWidget {
                 color: colors.primaryContainer,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(
-                Icons.water_drop_rounded,
-                color: colors.onPrimaryContainer,
-                size: 20,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset(
+                  'assets/common/logo/inapplogo.png',
+                  fit: BoxFit.cover,
+                  errorBuilder: (BuildContext context, Object error, StackTrace? stackTrace) {
+                    return Icon(
+                      Icons.water_drop_rounded,
+                      color: colors.onPrimaryContainer,
+                      size: 20,
+                    );
+                  },
+                ),
               ),
             ),
             const SizedBox(width: 10),
             Flexible(
               child: Text(
-                compact ? 'AW' : 'AlphaWet',
+                'AlphaWet',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 softWrap: false,

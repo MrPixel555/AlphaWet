@@ -13,6 +13,8 @@ class PersistedConfigRecord {
     required this.importStatus,
     required this.payloadKind,
     required this.isSecureEnvelope,
+    this.uploadBytes = 0,
+    this.downloadBytes = 0,
   });
 
   final String id;
@@ -22,6 +24,8 @@ class PersistedConfigRecord {
   final String importStatus;
   final String payloadKind;
   final bool isSecureEnvelope;
+  final int uploadBytes;
+  final int downloadBytes;
 }
 
 class ConfigStore {
@@ -99,6 +103,8 @@ class ConfigStore {
       importStatus: (json['importStatus'] as String? ?? 'Imported').trim(),
       payloadKind: (json['payloadKind'] as String? ?? 'unknown').trim(),
       isSecureEnvelope: json['isSecureEnvelope'] == true,
+      uploadBytes: (json['uploadBytes'] as num?)?.toInt() ?? 0,
+      downloadBytes: (json['downloadBytes'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -111,6 +117,8 @@ class ConfigStore {
       'importStatus': record.importStatus,
       'payloadKind': record.payloadKind,
       'isSecureEnvelope': record.isSecureEnvelope,
+      'uploadBytes': record.uploadBytes,
+      'downloadBytes': record.downloadBytes,
     };
   }
 

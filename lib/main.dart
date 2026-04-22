@@ -114,14 +114,6 @@ extension on ThemePreference {
       };
 }
 
-extension on ThemeMode {
-  ThemePreference get toPreference => switch (this) {
-        ThemeMode.light => ThemePreference.light,
-        ThemeMode.dark => ThemePreference.dark,
-        ThemeMode.system => ThemePreference.system,
-      };
-}
-
 extension on ThemePreference {
   String get storageValue => name;
 }
@@ -1341,52 +1333,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
       bottomNavigationBar: BottomAppBar(
-        height: 108,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: _previewLogs,
-                    icon: const Icon(Icons.receipt_long_outlined),
-                    label: const Text('Preview Logs'),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: _previewLogs,
+                      icon: const Icon(Icons.receipt_long_outlined),
+                      label: const Text('Preview Logs'),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _isExportingLogs ? null : _exportLogs,
-                    icon: _isExportingLogs
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.save_alt_rounded),
-                    label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _isExportingLogs ? null : _exportLogs,
+                      icon: _isExportingLogs
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_alt_rounded),
+                      label: Text(_isExportingLogs ? 'Exporting...' : 'Export Logs'),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            FilledButton.tonalIcon(
-              onPressed: () {
-                _logger.clear();
-                if (!mounted) {
-                  return;
-                }
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Logs cleared.')),
-                );
-              },
-              icon: const Icon(Icons.delete_sweep_outlined),
-              label: const Text('Clear Logs'),
-            ),
-            const SizedBox(height: 8),
-            const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
-          ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                onPressed: () {
+                  _logger.clear();
+                  if (!mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Logs cleared.')),
+                  );
+                },
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: const Text('Clear Logs'),
+              ),
+              const SizedBox(height: 8),
+              const Text('by AlphaWet', style: TextStyle(fontSize: 12)),
+            ],
+          ),
         ),
       ),
       body: SafeArea(

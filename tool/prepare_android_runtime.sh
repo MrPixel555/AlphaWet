@@ -148,6 +148,8 @@ elif 'buildFeatures {' not in text:
     text = text.replace('android {\n', 'android {\n    buildFeatures {\n        buildConfig = true\n    }\n', 1)
 if 'com.google.android.play:integrity' not in text:
     text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0")\n}\n'
+if 'com.google.android.play:core:' not in text:
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3") {\n        exclude(group = "com.google.android.play", module = "core-common")\n    }\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle.kts for JNI/CMake packaging + obfuscation + Play Integrity"
@@ -177,6 +179,8 @@ if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defau
     )
 if 'com.google.android.play:integrity' not in text:
     text += '\n\ndependencies {\n    implementation "com.google.android.play:integrity:1.4.0"\n}\n'
+if 'com.google.android.play:core:' not in text:
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3") {\n        exclude group: "com.google.android.play", module: "core-common"\n    }\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle for JNI/CMake packaging + obfuscation + Play Integrity"

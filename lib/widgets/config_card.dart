@@ -109,12 +109,12 @@ class ConfigCard extends StatelessWidget {
                   label: entry.importStatus,
                 ),
                 _StatusPill(
-                  icon: Icons.http_rounded,
-                  label: 'HTTP ${runtimeSettings.httpPort}',
+                  icon: Icons.upload_rounded,
+                  label: 'UP ${_formatBytes(entry.uploadBytes)}',
                 ),
                 _StatusPill(
-                  icon: Icons.route_rounded,
-                  label: 'SOCKS ${runtimeSettings.socksPort}',
+                  icon: Icons.download_rounded,
+                  label: 'DOWN ${_formatBytes(entry.downloadBytes)}',
                 ),
                 _StatusPill(
                   icon: runtimeSettings.enableDeviceVpn ? Icons.vpn_lock_rounded : Icons.lan_rounded,
@@ -252,6 +252,21 @@ class ConfigCard extends StatelessWidget {
   bool get _preferTunLabel => Platform.isWindows;
 
   bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) {
+      return '0 B';
+    }
+    const List<String> units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+    double size = bytes.toDouble();
+    int unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    final String text = size >= 10 ? size.toStringAsFixed(0) : size.toStringAsFixed(1);
+    return '$text ${units[unitIndex]}';
+  }
 
   IconData _runtimeIcon(VpnConnectionState state) {
     switch (state) {

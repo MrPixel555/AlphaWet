@@ -53,6 +53,10 @@ class AppLogger {
 
   List<AppLogRecord> snapshot() => List<AppLogRecord>.unmodifiable(_records);
 
+  void clear() {
+    _records.clear();
+  }
+
   String dumpAsText() {
     if (_records.isEmpty) {
       return '[NO LOGS] No records have been captured yet.';

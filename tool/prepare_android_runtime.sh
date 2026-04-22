@@ -147,7 +147,11 @@ if 'buildFeatures {' in text and 'buildConfig = true' not in text:
 elif 'buildFeatures {' not in text:
     text = text.replace('android {\n', 'android {\n    buildFeatures {\n        buildConfig = true\n    }\n', 1)
 if 'com.google.android.play:integrity' not in text:
-    text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0")\n}\n'
+    # Flutter embedding references splitcompat/splitinstall classes from the
+    # legacy Play Core package. We keep that package and exclude core-common
+    # from integrity to avoid duplicate classes between core:1.10.3 and
+    # core-common:2.x during checkReleaseDuplicateClasses.
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0") {\n        exclude(group = "com.google.android.play", module = "core-common")\n    }\n}\n'
 if 'com.google.android.play:core:' not in text:
     text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3")\n}\n'
 path.write_text(text)
@@ -178,7 +182,11 @@ if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defau
         1,
     )
 if 'com.google.android.play:integrity' not in text:
-    text += '\n\ndependencies {\n    implementation "com.google.android.play:integrity:1.4.0"\n}\n'
+    # Flutter embedding references splitcompat/splitinstall classes from the
+    # legacy Play Core package. We keep that package and exclude core-common
+    # from integrity to avoid duplicate classes between core:1.10.3 and
+    # core-common:2.x during checkReleaseDuplicateClasses.
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0") {\n        exclude group: "com.google.android.play", module: "core-common"\n    }\n}\n'
 if 'com.google.android.play:core:' not in text:
     text += '\n\ndependencies {\n    implementation "com.google.android.play:core:1.10.3"\n}\n'
 path.write_text(text)

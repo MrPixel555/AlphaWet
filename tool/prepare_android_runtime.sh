@@ -147,9 +147,10 @@ if 'buildFeatures {' in text and 'buildConfig = true' not in text:
 elif 'buildFeatures {' not in text:
     text = text.replace('android {\n', 'android {\n    buildFeatures {\n        buildConfig = true\n    }\n', 1)
 if 'com.google.android.play:integrity' not in text:
+    # Do not add com.google.android.play:core directly: integrity transitively
+    # brings newer split artifacts (core-common, etc.) and mixing with legacy
+    # core:1.10.3 causes duplicate-class failures during release builds.
     text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0")\n}\n'
-if 'com.google.android.play:core:' not in text:
-    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3")\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle.kts for JNI/CMake packaging + obfuscation + Play Integrity"
@@ -178,9 +179,10 @@ if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defau
         1,
     )
 if 'com.google.android.play:integrity' not in text:
+    # Do not add com.google.android.play:core directly: integrity transitively
+    # brings newer split artifacts (core-common, etc.) and mixing with legacy
+    # core:1.10.3 causes duplicate-class failures during release builds.
     text += '\n\ndependencies {\n    implementation "com.google.android.play:integrity:1.4.0"\n}\n'
-if 'com.google.android.play:core:' not in text:
-    text += '\n\ndependencies {\n    implementation "com.google.android.play:core:1.10.3"\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle for JNI/CMake packaging + obfuscation + Play Integrity"

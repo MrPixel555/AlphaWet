@@ -160,7 +160,7 @@ if 'com.google.android.play:integrity' not in text:
     # core-common:2.x during checkReleaseDuplicateClasses.
     text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0") {\n        exclude(group = "com.google.android.play", module = "core-common")\n    }\n}\n'
 if 'com.google.android.play:core:' not in text:
-    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3")\n}\n'
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3") {\n        exclude(group = "com.google.android.play", module = "core-common")\n    }\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle.kts for JNI/CMake packaging + obfuscation + Play Integrity"
@@ -195,7 +195,7 @@ if 'com.google.android.play:integrity' not in text:
     # core-common:2.x during checkReleaseDuplicateClasses.
     text += '\n\ndependencies {\n    implementation("com.google.android.play:integrity:1.4.0") {\n        exclude group: "com.google.android.play", module: "core-common"\n    }\n}\n'
 if 'com.google.android.play:core:' not in text:
-    text += '\n\ndependencies {\n    implementation "com.google.android.play:core:1.10.3"\n}\n'
+    text += '\n\ndependencies {\n    implementation("com.google.android.play:core:1.10.3") {\n        exclude group: "com.google.android.play", module: "core-common"\n    }\n}\n'
 path.write_text(text)
 PY
   echo "[OK] Patched build.gradle for JNI/CMake packaging + obfuscation + Play Integrity"

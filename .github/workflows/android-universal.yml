@@ -11,6 +11,7 @@ jobs:
       BUILD_ROOT: /tmp/alphawet
       AW_INCLUDE_X86_64: '1'
       ORG_GRADLE_PROJECT_PLAY_CLOUD_PROJECT_NUMBER: ${{ secrets.AW_PLAY_CLOUD_PROJECT_NUMBER }}
+      ORG_GRADLE_PROJECT_EXPECTED_SIGNING_CERT_SHA256: ${{ secrets.AW_EXPECTED_SIGNING_CERT_SHA256 }}
 
     steps:
       - name: Checkout repository

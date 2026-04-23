@@ -73,6 +73,9 @@ permissions = [
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
     'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
+    'android.permission.READ_EXTERNAL_STORAGE',
+    'android.permission.WRITE_EXTERNAL_STORAGE',
+    'android.permission.MANAGE_EXTERNAL_STORAGE',
 ]
 for permission in permissions:
     marker = f'<uses-permission android:name="{permission}" />'
@@ -82,6 +85,10 @@ for permission in permissions:
 
 if 'android:extractNativeLibs=' not in text:
     text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
+
+main_activity_pattern = r'(<activity[^>]+android:name="\.MainActivity"[^>]*)(/?>)'
+if 'android:screenOrientation=' not in text:
+    text = re.sub(main_activity_pattern, r'\1 android:screenOrientation="portrait"\2', text, count=1)
 
 if 'AlphaWetProxyService' not in text:
     proxy_service_block = '''
@@ -139,7 +146,7 @@ if 'isMinifyEnabled = true' not in text and 'buildTypes {' in text:
 if 'buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
     text = text.replace(
         'defaultConfig {\n',
-        'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n',
+        'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        val expectedSigningCertSha256 = (project.findProperty("EXPECTED_SIGNING_CERT_SHA256") as String?) ?: ""\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n        buildConfigField("String", "EXPECTED_SIGNING_CERT_SHA256", "\"${expectedSigningCertSha256}\"")\n',
         1,
     )
 if 'buildFeatures {' in text and 'buildConfig = true' not in text:
@@ -178,7 +185,7 @@ if 'minifyEnabled true' not in text and 'buildTypes {' in text:
 if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
     text = text.replace(
         'defaultConfig {\n',
-        'defaultConfig {\n        def playCloudProjectNumber = project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") ?: "0"\n        buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L"\n',
+        'defaultConfig {\n        def playCloudProjectNumber = project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") ?: "0"\n        def expectedSigningCertSha256 = project.findProperty("EXPECTED_SIGNING_CERT_SHA256") ?: ""\n        buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L"\n        buildConfigField "String", "EXPECTED_SIGNING_CERT_SHA256", "\"${expectedSigningCertSha256}\""\n',
         1,
     )
 if 'com.google.android.play:integrity' not in text:

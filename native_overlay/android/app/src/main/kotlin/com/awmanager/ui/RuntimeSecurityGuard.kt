@@ -39,7 +39,7 @@ object RuntimeSecurityGuard {
         }
     }
 
-    private fun isRooted(): Boolean {
+    fun isRooted(): Boolean {
         if (Build.TAGS?.contains("test-keys") == true) return true
 
         if (suCandidates.any { File(it).exists() }) return true

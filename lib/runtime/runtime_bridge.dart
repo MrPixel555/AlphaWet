@@ -26,6 +26,51 @@ class RuntimeBridge {
     return granted ?? false;
   }
 
+
+  static Future<bool> ensureManageStoragePermission() async {
+    if (!Platform.isAndroid) {
+      return true;
+    }
+    final bool? granted = await _channel.invokeMethod<bool>('ensureManageStoragePermission');
+    return granted ?? false;
+  }
+
+  static Future<Map<Object?, Object?>?> performPostConnectSecurityCheck({
+    required String configId,
+    required String displayName,
+    required bool enableDeviceVpn,
+    required bool vpnPermissionGranted,
+    required String? configJson,
+    required int httpPort,
+    required int socksPort,
+  }) async {
+    if (!Platform.isAndroid) {
+      return <Object?, Object?>{
+        'success': true,
+        'state': 'connected',
+        'message': 'Post-connect security check is only active on Android.',
+      };
+    }
+    try {
+      return await _channel.invokeMapMethod<Object?, Object?>(
+        'performPostConnectSecurityCheck',
+        <String, Object?>{
+          'configId': configId,
+          'displayName': displayName,
+          'enableDeviceVpn': enableDeviceVpn,
+          'vpnPermissionGranted': vpnPermissionGranted,
+          'configJson': configJson,
+          'httpPort': httpPort,
+          'socksPort': socksPort,
+        },
+      );
+    } on MissingPluginException {
+      return <Object?, Object?>{'success': false, 'state': 'failed', 'message': 'Android runtime bridge is missing.'};
+    } on PlatformException catch (error) {
+      return <Object?, Object?>{'success': false, 'state': 'failed', 'message': error.message ?? 'Post-connect security check failed.'};
+    }
+  }
+
   static Future<Map<Object?, Object?>?> getCoreStatus() async {
     if (Platform.isWindows || Platform.isLinux) {
       return DesktopXrayRuntimeManager.instance.currentStatus();

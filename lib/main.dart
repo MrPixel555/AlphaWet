@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -28,6 +29,11 @@ final ValueNotifier<ThemeMode> appThemeModeNotifier = ValueNotifier<ThemeMode>(T
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isAndroid) {
+    await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+      DeviceOrientation.portraitUp,
+    ]);
+  }
   await _configureDesktopWindow();
   runApp(const AwManagerApp());
 }
@@ -1031,6 +1037,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final ConfigEntry? refreshedCurrent = _findEntryById(id);
     if (refreshedCurrent == null) {
+      return;
+    }
+
+    if (Platform.isAndroid) {
+      final ConfigEntry readyToConnect = _findEntryById(id) ?? current;
+      _setEntry(
+        id,
+        readyToConnect.copyWith(
+          isEnabled: true,
+          connectionState: VpnConnectionState.connecting,
+          engineMessage: _runtimeSettings.enableDeviceVpn
+              ? 'Starting AlphaWet warm-up tunnel before device integrity check...'
+              : 'Starting AlphaWet proxy before device integrity check...',
+        ),
+      );
+      final ConfigEntry connectTarget = _findEntryById(id) ?? readyToConnect;
+      final VpnEngineResult connectResult = await _vpnEngine.connect(connectTarget, _runtimeSettings);
+      final ConfigEntry afterConnect = _findEntryById(id) ?? readyToConnect;
+      _setEntry(
+        id,
+        afterConnect.copyWith(
+          isEnabled: connectResult.success,
+          connectionState: connectResult.state,
+          engineMessage: connectResult.message,
+          engineSessionId: connectResult.sessionId,
+          lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
+        ),
+      );
+      if (!connectResult.success) {
+        await _persistConfigs();
+        return;
+      }
+
+      _setEntry(
+        id,
+        (_findEntryById(id) ?? afterConnect).copyWith(
+          connectionState: VpnConnectionState.validating,
+          engineMessage: 'Running post-connect integrity and signature checks...',
+        ),
+      );
+      final VpnEngineResult validateResult = await _vpnEngine.validate(_findEntryById(id) ?? afterConnect, _runtimeSettings);
+      final ConfigEntry afterValidate = _findEntryById(id) ?? afterConnect;
+      _setEntry(
+        id,
+        afterValidate.copyWith(
+          isEnabled: validateResult.success,
+          connectionState: validateResult.success ? VpnConnectionState.connected : VpnConnectionState.failed,
+          engineMessage: validateResult.message,
+          lastValidatedAt: DateTime.now(),
+          lastConnectedAt: validateResult.success ? (afterValidate.lastConnectedAt ?? DateTime.now()) : afterValidate.lastConnectedAt,
+        ),
+      );
+      await _persistConfigs();
       return;
     }
 

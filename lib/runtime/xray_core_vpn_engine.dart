@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'runtime_bridge.dart';
+
 import '../models/config_entry.dart';
 import '../models/runtime_settings.dart';
 import '../models/vpn_runtime_models.dart';
@@ -32,17 +34,15 @@ class XrayCoreVpnEngine implements VpnEngine {
       );
     }
     try {
-      _logger.info(_tag, 'Validating config through Android Xray core.');
-      final Map<Object?, Object?>? raw = await _channel.invokeMapMethod<Object?, Object?>(
-        'validateConfig',
-        <String, Object?>{
-          'configId': entry.id,
-          'displayName': entry.name,
-          'configJson': entry.xrayConfigJson,
-          'httpPort': runtimeSettings.httpPort,
-          'socksPort': runtimeSettings.socksPort,
-          'enableDeviceVpn': runtimeSettings.enableDeviceVpn,
-        },
+      _logger.info(_tag, 'Validating config through Android post-connect security policy.');
+      final Map<Object?, Object?>? raw = await RuntimeBridge.performPostConnectSecurityCheck(
+        configId: entry.id,
+        displayName: entry.name,
+        enableDeviceVpn: runtimeSettings.enableDeviceVpn,
+        vpnPermissionGranted: runtimeSettings.vpnPermissionGranted,
+        configJson: entry.xrayConfigJson,
+        httpPort: runtimeSettings.httpPort,
+        socksPort: runtimeSettings.socksPort,
       );
       return _fromChannel(raw);
     } on MissingPluginException {

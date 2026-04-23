@@ -65,7 +65,7 @@ Optional resource files:
 If your repo does not have `android/` yet, generate it first:
 
 ```bash
-flutter create --platforms=android --project-name alphawet --org com.alphawet .
+flutter create --platforms=android --project-name alphawet --org ir.alphacraft.alphawet .
 ```
 
 Then apply the native Android overlay:

@@ -1,4 +1,4 @@
-name: AlphaWet
+name: alphawet
 description: AlphaWet a secure Virtual Private Network (VPN) client, leveraging the private method for advanced tunneling capabilities. It provides users with a seamless and secure way to protect their online privacy and access restricted content across various platforms.
 publish_to: 'none'
 version: 2.3.8+238

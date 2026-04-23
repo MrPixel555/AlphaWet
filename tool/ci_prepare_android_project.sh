@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_DIR="${1:-$PWD}"
 BUILD_ROOT="${2:-/tmp/alphawet}"
-PROJECT_NAME="AlphaWet"
+PROJECT_NAME="alphawet"
 ANDROID_ORG="ir.alphacraft.alphawet"
 
 rm -rf "${BUILD_ROOT}"

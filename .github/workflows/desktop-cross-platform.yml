@@ -53,8 +53,8 @@ jobs:
         run: |
           flutter create \
             --platforms=${{ matrix.target }} \
-            --project-name alpha_wet \
-            --org com.alphacraft \
+            --project-name AlphaWet \
+            --org ir.alphacraft.alphawet \
             .
 
       - name: Configure Windows UAC elevation for TUN routing

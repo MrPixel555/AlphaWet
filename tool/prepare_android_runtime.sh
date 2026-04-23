@@ -145,8 +145,8 @@ if 'isMinifyEnabled = true' not in text and 'buildTypes {' in text:
     )
 if 'buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
     text = text.replace(
-        'defaultConfig {\n',
-        'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        val expectedSigningCertSha256 = (project.findProperty("EXPECTED_SIGNING_CERT_SHA256") as String?) ?: ""\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n        buildConfigField("String", "EXPECTED_SIGNING_CERT_SHA256", "\"${expectedSigningCertSha256}\"")\n',
+		'defaultConfig {\n',
+		'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        val expectedSigningCertSha256 = (project.findProperty("EXPECTED_SIGNING_CERT_SHA256") as String?) ?: ""\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n        buildConfigField("String", "EXPECTED_SIGNING_CERT_SHA256", "\\\"${expectedSigningCertSha256}\\\"")\n',
         1,
     )
 if 'buildFeatures {' in text and 'buildConfig = true' not in text:

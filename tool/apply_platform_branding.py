@@ -4,7 +4,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+try:
+    from PIL import Image, ImageDraw
+except ModuleNotFoundError:  # CI runners may not have Pillow preinstalled.
+    Image = None
+    ImageDraw = None
 
 
 APP_NAME = "AlphaWet"
@@ -19,6 +23,17 @@ def ensure_logo_assets(repo_root: Path) -> tuple[Path, Path]:
     asset_dir.mkdir(parents=True, exist_ok=True)
     ico_path = asset_dir / ICO_NAME
     png_path = asset_dir / IN_APP_NAME
+
+    if png_path.exists() and ico_path.exists():
+        return ico_path, png_path
+
+    if Image is None:
+        if not png_path.exists() or not ico_path.exists():
+            raise SystemExit(
+                "Branding assets are missing and Pillow is unavailable. "
+                "Commit assets/common/logo/applogo.ico and assets/common/logo/inapplogo.png."
+            )
+        return ico_path, png_path
 
     if ico_path.exists():
         icon = Image.open(ico_path)
@@ -44,6 +59,8 @@ def ensure_logo_assets(repo_root: Path) -> tuple[Path, Path]:
 
 
 def _build_fallback_icon() -> Image.Image:
+    if Image is None or ImageDraw is None:
+        raise RuntimeError("Pillow is required to generate fallback branding assets.")
     size = 512
     image = Image.new("RGBA", (size, size), "#0b1f2a")
     draw = ImageDraw.Draw(image)
@@ -76,7 +93,6 @@ def apply_android_branding(repo_root: Path, png_path: Path) -> None:
             )
         manifest_path.write_text(text, encoding="utf-8")
 
-    icon = Image.open(png_path).convert("RGBA")
     for density, size in {
         "mipmap-mdpi": 48,
         "mipmap-hdpi": 72,
@@ -86,9 +102,15 @@ def apply_android_branding(repo_root: Path, png_path: Path) -> None:
     }.items():
         target_dir = android_main / "res" / density
         target_dir.mkdir(parents=True, exist_ok=True)
-        resized = icon.resize((size, size), Image.LANCZOS)
-        resized.save(target_dir / "ic_launcher.png", format="PNG")
-        resized.save(target_dir / "ic_launcher_round.png", format="PNG")
+        if Image is None:
+            data = png_path.read_bytes()
+            (target_dir / "ic_launcher.png").write_bytes(data)
+            (target_dir / "ic_launcher_round.png").write_bytes(data)
+        else:
+            icon = Image.open(png_path).convert("RGBA")
+            resized = icon.resize((size, size), Image.LANCZOS)
+            resized.save(target_dir / "ic_launcher.png", format="PNG")
+            resized.save(target_dir / "ic_launcher_round.png", format="PNG")
 
 
 def apply_windows_branding(repo_root: Path, ico_path: Path) -> None:
@@ -120,7 +142,10 @@ def apply_linux_branding(repo_root: Path, png_path: Path) -> None:
 
     icon_target = linux_dir / "runner/resources/app_icon.png"
     icon_target.parent.mkdir(parents=True, exist_ok=True)
-    Image.open(png_path).convert("RGBA").resize((256, 256), Image.LANCZOS).save(icon_target, format="PNG")
+    if Image is None:
+        icon_target.write_bytes(png_path.read_bytes())
+    else:
+        Image.open(png_path).convert("RGBA").resize((256, 256), Image.LANCZOS).save(icon_target, format="PNG")
 
     cmake_path = linux_dir / "CMakeLists.txt"
     if cmake_path.exists():

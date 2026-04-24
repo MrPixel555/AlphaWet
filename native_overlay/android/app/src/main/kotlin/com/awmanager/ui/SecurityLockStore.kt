@@ -8,11 +8,8 @@ object SecurityLockStore {
     private const val KEY_REASON = "reason"
 
     fun markLocked(context: Context, reason: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_LOCKED, true)
-            .putString(KEY_REASON, reason)
-            .apply()
+        // Temporary diagnostics mode: avoid persisting a lock while we
+        // investigate startup failures on real devices.
     }
 
     fun isLocked(context: Context): Boolean =

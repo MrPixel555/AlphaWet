@@ -25,12 +25,20 @@ class SecurityPolicyEnforcer(private val context: Context) {
             }
         }
         if (RuntimeSecurityGuard.isRooted()) {
-            SecurityLockStore.markLocked(context, "ROOT_DETECTED")
-            throw SecurityException("ROOT_DETECTED")
+            throw SecurityException(
+                buildString {
+                    appendLine("ROOT_DETECTED")
+                    RuntimeSecurityGuard.collectFindings().forEach { appendLine(it) }
+                }.trim(),
+            )
         }
         if (!AppSignatureVerifier.isSignatureValid(context)) {
-            SecurityLockStore.markLocked(context, "SIGNATURE_MISMATCH")
-            throw SecurityException("SIGNATURE_MISMATCH")
+            throw SecurityException(
+                buildString {
+                    appendLine("SIGNATURE_MISMATCH")
+                    append(AppSignatureVerifier.diagnosticReport(context))
+                },
+            )
         }
         RuntimeSecurityGuard.enforceRuntimeSecurity(context)
     }

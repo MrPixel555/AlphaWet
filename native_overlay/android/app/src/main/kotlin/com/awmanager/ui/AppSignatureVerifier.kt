@@ -14,6 +14,17 @@ object AppSignatureVerifier {
         return actual == expected
     }
 
+    fun diagnosticReport(context: Context): String {
+        val expected = BuildConfig.EXPECTED_SIGNING_CERT_SHA256.trim().uppercase(Locale.US)
+        val actual = currentSha256(context)
+        return buildString {
+            appendLine("Signature check")
+            appendLine("expectedSha256=${expected.ifBlank { "<blank>" }}")
+            appendLine("actualSha256=${actual ?: "<unavailable>"}")
+            appendLine("match=${if (expected.isBlank()) "skipped" else (actual == expected)}")
+        }.trim()
+    }
+
     private fun currentSha256(context: Context): String? {
         val pm = context.packageManager
         val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

@@ -24,18 +24,14 @@ object RuntimeSecurityGuard {
     )
 
     fun enforceRuntimeSecurity(context: Context) {
-        val issues = mutableListOf<String>()
-        if (isRooted()) {
-            issues += "ROOT_DETECTED"
-        }
-        if (isFridaDetected()) {
-            issues += "FRIDA_DETECTED"
-        }
-        if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) {
-            issues += "DEBUGGER_DETECTED"
-        }
-        if (issues.isNotEmpty()) {
-            throw SecurityException("Runtime security policy violation: ${issues.joinToString(",")}")
+        val findings = collectFindings()
+        if (findings.isNotEmpty()) {
+            throw SecurityException(
+                buildString {
+                    appendLine("Runtime security policy violation")
+                    findings.forEach { appendLine(it) }
+                }.trim(),
+            )
         }
     }
 
@@ -67,20 +63,72 @@ object RuntimeSecurityGuard {
         return false
     }
 
-    private fun isFridaDetected(): Boolean {
+    fun collectFindings(): List<String> {
+        val findings = mutableListOf<String>()
+        findings += collectRootFindings()
+        findings += collectFridaFindings()
+        if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) {
+            findings += "DEBUGGER_DETECTED connected=${Debug.isDebuggerConnected()} waiting=${Debug.waitingForDebugger()}"
+        }
+        return findings
+    }
+
+    private fun collectRootFindings(): List<String> {
+        val findings = mutableListOf<String>()
+
+        if (Build.TAGS?.contains("test-keys") == true) {
+            findings += "ROOT_DETECTED buildTags=test-keys rawBuildTags=${Build.TAGS}"
+        }
+
+        suCandidates.filter { File(it).exists() }.forEach { path ->
+            findings += "ROOT_DETECTED suFileExists=$path"
+        }
+
+        runCatching {
+            val process = ProcessBuilder("which", "su").redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+            process.waitFor()
+            output
+        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { output ->
+            findings += "ROOT_DETECTED whichSu=$output"
+        }
+
+        val rwPaths = listOf("/system", "/system/bin", "/system/xbin", "/vendor/bin")
+        val mountOutput = runCatching {
+            ProcessBuilder("mount").redirectErrorStream(true).start()
+                .inputStream.bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+        if (mountOutput.isNotBlank()) {
+            val lowered = mountOutput.lowercase()
+            rwPaths.filter { path -> lowered.contains(" $path ") && lowered.contains(" rw,") }.forEach { path ->
+                findings += "ROOT_DETECTED writableMount=$path"
+            }
+        }
+
+        return findings
+    }
+
+    private fun collectFridaFindings(): List<String> {
+        val findings = mutableListOf<String>()
         val suspiciousPorts = listOf(27042, 27043, 23946)
-        if (suspiciousPorts.any { isPortOpen(it) }) return true
+        suspiciousPorts.filter { isPortOpen(it) }.forEach { port ->
+            findings += "FRIDA_DETECTED openPort=$port"
+        }
 
         val ps = runCatching {
             ProcessBuilder("ps", "-A").redirectErrorStream(true).start()
                 .inputStream.bufferedReader().use { it.readText() }
         }.getOrDefault("").lowercase()
-        if (ps.contains("frida") || ps.contains("gum-js-loop") || ps.contains("gadget")) return true
+        if (ps.contains("frida") || ps.contains("gum-js-loop") || ps.contains("gadget")) {
+            findings += "FRIDA_DETECTED processListMatch=true"
+        }
 
         val maps = runCatching { File("/proc/self/maps").readText().lowercase() }.getOrDefault("")
-        if (maps.contains("frida") || maps.contains("gadget") || maps.contains("libfrida")) return true
+        if (maps.contains("frida") || maps.contains("gadget") || maps.contains("libfrida")) {
+            findings += "FRIDA_DETECTED procMapsMatch=true"
+        }
 
-        return false
+        return findings
     }
 
     private fun isPortOpen(port: Int): Boolean {

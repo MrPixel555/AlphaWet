@@ -44,9 +44,6 @@ jobs:
           dart --version
           java -version
 
-      - name: Install Pillow for branding pipeline
-        run: python3 -m pip install --user Pillow
-
       - name: Validate required signing inputs exist
         run: |
           test -n "$AW_ANDROID_KEYSTORE_BASE64"

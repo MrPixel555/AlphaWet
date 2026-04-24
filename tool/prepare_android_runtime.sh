@@ -64,61 +64,104 @@ MANIFEST_PATH="${ANDROID_DIR}/app/src/main/AndroidManifest.xml"
 if [ -f "${MANIFEST_PATH}" ]; then
   python3 - <<'PY' "${MANIFEST_PATH}"
 from pathlib import Path
-import re
 import sys
+import xml.etree.ElementTree as ET
 
 path = Path(sys.argv[1])
-text = path.read_text()
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+ET.register_namespace("android", ANDROID_NS)
+
+tree = ET.parse(path)
+root = tree.getroot()
+
 permissions = [
-    'android.permission.INTERNET',
-    'android.permission.FOREGROUND_SERVICE',
-    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
-    'android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
-    'android.permission.READ_EXTERNAL_STORAGE',
-    'android.permission.WRITE_EXTERNAL_STORAGE',
-    'android.permission.MANAGE_EXTERNAL_STORAGE',
+    "android.permission.INTERNET",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    "android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
 ]
+
+android_name_attr = f"{{{ANDROID_NS}}}name"
+existing_permissions = {
+    elem.get(android_name_attr)
+    for elem in root.findall("uses-permission")
+}
+
+insert_index = 0
 for permission in permissions:
-    marker = f'<uses-permission android:name="{permission}" />'
-    if marker not in text:
-        needle = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-        text = text.replace(needle, needle + '\n    ' + marker, 1)
+    if permission in existing_permissions:
+        continue
+    elem = ET.Element("uses-permission")
+    elem.set(android_name_attr, permission)
+    root.insert(insert_index, elem)
+    insert_index += 1
 
-if 'android:extractNativeLibs=' not in text:
-    text = re.sub(r'<application\b', '<application android:extractNativeLibs="true"', text, count=1)
+application = root.find("application")
+if application is None:
+    raise SystemExit("AndroidManifest.xml is missing an <application> element.")
 
-main_activity_pattern = r'(<activity[^>]+android:name="\.MainActivity"[^>]*)(/?>)'
-if 'android:screenOrientation=' not in text:
-    text = re.sub(main_activity_pattern, r'\1 android:screenOrientation="portrait"\2', text, count=1)
+application.set(f"{{{ANDROID_NS}}}extractNativeLibs", "true")
 
-if 'AlphaWetProxyService' not in text:
-    proxy_service_block = '''
-        <service
-            android:name=".AlphaWetProxyService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the user-started AlphaWet local proxy tunnel alive while the app is backgrounded." />
-        </service>
-'''
-    text = text.replace('</application>', proxy_service_block + '    </application>', 1)
+main_activity = None
+for activity in application.findall("activity"):
+    activity_name = activity.get(android_name_attr)
+    if activity_name in {".MainActivity", "MainActivity"} or activity_name.endswith(".MainActivity"):
+        main_activity = activity
+        break
 
-if 'AlphaWetVpnService' not in text:
-    vpn_service_block = '''
-        <service
-            android:name=".AlphaWetVpnService"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="systemExempted">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
-'''
-    text = text.replace('</application>', vpn_service_block + '    </application>', 1)
+if main_activity is not None:
+    main_activity.set(f"{{{ANDROID_NS}}}screenOrientation", "portrait")
 
-path.write_text(text)
+def ensure_service(name: str) -> ET.Element:
+    for service in application.findall("service"):
+        if service.get(android_name_attr) == name:
+            return service
+    service = ET.SubElement(application, "service")
+    service.set(android_name_attr, name)
+    return service
+
+proxy_service = ensure_service(".AlphaWetProxyService")
+proxy_service.set(f"{{{ANDROID_NS}}}exported", "false")
+proxy_service.set(f"{{{ANDROID_NS}}}foregroundServiceType", "specialUse")
+
+property_name_attr = f"{{{ANDROID_NS}}}name"
+property_value_attr = f"{{{ANDROID_NS}}}value"
+proxy_property = None
+for child in proxy_service.findall("property"):
+    if child.get(property_name_attr) == "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE":
+        proxy_property = child
+        break
+if proxy_property is None:
+    proxy_property = ET.SubElement(proxy_service, "property")
+proxy_property.set(property_name_attr, "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE")
+proxy_property.set(
+    property_value_attr,
+    "Keeps the user-started AlphaWet local proxy tunnel alive while the app is backgrounded.",
+)
+
+vpn_service = ensure_service(".AlphaWetVpnService")
+vpn_service.set(f"{{{ANDROID_NS}}}exported", "false")
+vpn_service.set(f"{{{ANDROID_NS}}}permission", "android.permission.BIND_VPN_SERVICE")
+vpn_service.set(f"{{{ANDROID_NS}}}foregroundServiceType", "systemExempted")
+
+intent_filter = vpn_service.find("intent-filter")
+if intent_filter is None:
+    intent_filter = ET.SubElement(vpn_service, "intent-filter")
+
+vpn_action = None
+for action in intent_filter.findall("action"):
+    if action.get(android_name_attr) == "android.net.VpnService":
+        vpn_action = action
+        break
+if vpn_action is None:
+    vpn_action = ET.SubElement(intent_filter, "action")
+vpn_action.set(android_name_attr, "android.net.VpnService")
+
+ET.indent(tree, space="    ")
+tree.write(path, encoding="utf-8", xml_declaration=True)
 PY
   echo "[OK] Patched AndroidManifest.xml permissions/service/extraction flags"
 fi

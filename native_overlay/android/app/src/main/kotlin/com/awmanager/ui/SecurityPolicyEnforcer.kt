@@ -6,11 +6,23 @@ class SecurityPolicyEnforcer(private val context: Context) {
     companion object {
         private const val requiredDeviceIntegrityLabel = "MEETS_DEVICE_INTEGRITY"
         private const val maxVerdictAgeMillis = 2 * 60 * 1000L
+        private val recoverableLockReasons = setOf(
+            "PLAY_CLOUD_PROJECT_NUMBER_MISSING",
+            "INTEGRITY_VERDICT_ENDPOINT_MISSING",
+            "INTEGRITY_TOKEN_REQUEST_FAILED",
+            "INTEGRITY_REQUEST_HASH_MISMATCH",
+            "INTEGRITY_TOKEN_STALE",
+        )
     }
 
     fun enforceStartupPolicy() {
         if (SecurityLockStore.isLocked(context)) {
-            throw SecurityException(SecurityLockStore.reason(context))
+            val reason = SecurityLockStore.reason(context)
+            if (reason in recoverableLockReasons) {
+                SecurityLockStore.clear(context)
+            } else {
+                throw SecurityException(reason)
+            }
         }
         if (RuntimeSecurityGuard.isRooted()) {
             SecurityLockStore.markLocked(context, "ROOT_DETECTED")
@@ -40,13 +52,11 @@ class SecurityPolicyEnforcer(private val context: Context) {
 
         val cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER
         if (cloudProjectNumber <= 0L) {
-            SecurityLockStore.markLocked(context, "PLAY_CLOUD_PROJECT_NUMBER_MISSING")
             throw SecurityException("PLAY_CLOUD_PROJECT_NUMBER_MISSING")
         }
 
         val verdictUrl = BuildConfig.PLAY_INTEGRITY_VERDICT_URL.trim()
         if (verdictUrl.isBlank()) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_VERDICT_ENDPOINT_MISSING")
             throw SecurityException("INTEGRITY_VERDICT_ENDPOINT_MISSING")
         }
 
@@ -58,7 +68,6 @@ class SecurityPolicyEnforcer(private val context: Context) {
                 requestHash = requestData.requestHash,
             )
         } catch (error: Throwable) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_TOKEN_REQUEST_FAILED")
             throw SecurityException("INTEGRITY_TOKEN_REQUEST_FAILED")
         }
 
@@ -84,12 +93,10 @@ class SecurityPolicyEnforcer(private val context: Context) {
             throw SecurityException("INTEGRITY_BACKEND_POLICY_REJECTED")
         }
         if (decoded.requestHash != requestData.requestHash) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_REQUEST_HASH_MISMATCH")
             throw SecurityException("INTEGRITY_REQUEST_HASH_MISMATCH")
         }
         val now = System.currentTimeMillis()
         if (decoded.requestTimestampMillis <= 0L || now - decoded.requestTimestampMillis > maxVerdictAgeMillis) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_TOKEN_STALE")
             throw SecurityException("INTEGRITY_TOKEN_STALE")
         }
         if (!decoded.appRecognitionVerdict.contains("PLAY_RECOGNIZED")) {

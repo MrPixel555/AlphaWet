@@ -1,6 +1,7 @@
 package com.awmanager.ui
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
@@ -10,6 +11,7 @@ import android.os.Process
 import android.os.Environment
 import android.provider.Settings
 import android.content.pm.ActivityInfo
+import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -17,6 +19,10 @@ import io.flutter.plugin.common.MethodChannel
 import kotlin.system.exitProcess
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        private const val logTag = "AlphaWet"
+    }
+
     private lateinit var securityPolicyEnforcer: SecurityPolicyEnforcer
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,8 +36,10 @@ class MainActivity : FlutterActivity() {
         runCatching {
             securityPolicyEnforcer.enforceStartupPolicy()
             securityPolicyEnforcer.warmUpIntegrityProviderIfConfigured()
-        }.onFailure {
-            finishAffinity()
+        }.onFailure { error ->
+            val reason = error.message ?: error.javaClass.simpleName
+            Log.e(logTag, "Startup security check failed: $reason", error)
+            showStartupFailureDialog(reason)
         }
     }
 
@@ -142,6 +150,21 @@ class MainActivity : FlutterActivity() {
             }
             Process.killProcess(Process.myPid())
             exitProcess(0)
+        }
+    }
+
+    private fun showStartupFailureDialog(reason: String) {
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle("Startup blocked")
+                .setMessage(
+                    "AlphaWet could not start because a security check failed.\n\nReason: $reason",
+                )
+                .setCancelable(false)
+                .setPositiveButton("Close") { _, _ ->
+                    finishAffinity()
+                }
+                .show()
         }
     }
 

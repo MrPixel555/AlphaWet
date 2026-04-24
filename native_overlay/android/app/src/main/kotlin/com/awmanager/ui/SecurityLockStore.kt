@@ -20,4 +20,12 @@ object SecurityLockStore {
 
     fun reason(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_REASON, "SECURITY_LOCKED") ?: "SECURITY_LOCKED"
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_LOCKED)
+            .remove(KEY_REASON)
+            .apply()
+    }
 }

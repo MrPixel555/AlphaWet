@@ -31,7 +31,11 @@ class SecurityPolicyEnforcer(private val context: Context) {
         PlayIntegrityStandardClient.warmUp(context, cloudProjectNumber)
     }
 
-    fun performPostConnectPolicy(configId: String): Map<String, Any?> {
+    fun performPostConnectPolicy(
+        configId: String,
+        enableDeviceVpn: Boolean,
+        httpPort: Int,
+    ): Map<String, Any?> {
         enforceStartupPolicy()
 
         val cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER
@@ -64,10 +68,11 @@ class SecurityPolicyEnforcer(private val context: Context) {
                 requestData = requestData,
                 integrityToken = integrityToken,
                 requiredLabel = requiredDeviceIntegrityLabel,
+                useActiveTunnelProxy = !enableDeviceVpn,
+                proxyHttpPort = httpPort,
             )
         } catch (error: Throwable) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_VERDICT_DECODE_FAILED")
-            throw SecurityException("INTEGRITY_VERDICT_DECODE_FAILED")
+            throw SecurityException("INTEGRITY_VERDICT_DECODE_FAILED:${error.message ?: "UNREACHABLE"}")
         }
 
         if (decoded.requestPackageName != context.packageName) {

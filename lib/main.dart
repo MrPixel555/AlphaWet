@@ -1073,8 +1073,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _setEntry(
         id,
         (_findEntryById(id) ?? afterConnect).copyWith(
-          connectionState: VpnConnectionState.validating,
-          engineMessage: 'Running post-connect integrity and signature checks...',
+          connectionState: VpnConnectionState.connecting,
+          engineMessage: 'Connection is up. Running post-connect integrity and signature checks through the active tunnel...',
         ),
       );
       final VpnEngineResult validateResult = await _vpnEngine.validate(_findEntryById(id) ?? afterConnect, _runtimeSettings);

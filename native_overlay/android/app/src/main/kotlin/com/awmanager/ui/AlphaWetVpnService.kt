@@ -109,10 +109,6 @@ class AlphaWetVpnService : VpnService() {
             builder.setConfigureIntent(pendingIntent)
         }
 
-        runCatching {
-            builder.addDisallowedApplication(packageName)
-        }
-
         val vpnInterface = builder.establish() ?: return -1
         return vpnInterface.detachFd()
     }

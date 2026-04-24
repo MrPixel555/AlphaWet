@@ -162,6 +162,7 @@ class XrayCoreVpnEngine implements VpnEngine {
         'validating' => VpnConnectionState.validating,
         'ready' => VpnConnectionState.ready,
         'connecting' => VpnConnectionState.connecting,
+        'running' => VpnConnectionState.connecting,
         'connected' => VpnConnectionState.connected,
         'disconnecting' => VpnConnectionState.disconnecting,
         _ => VpnConnectionState.failed,

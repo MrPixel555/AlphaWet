@@ -5,6 +5,8 @@ import org.json.JSONObject
 import java.io.BufferedWriter
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
@@ -29,8 +31,16 @@ object IntegrityVerdictHttpClient {
         requestData: IntegrityCheckRequestData,
         integrityToken: String,
         requiredLabel: String,
+        useActiveTunnelProxy: Boolean,
+        proxyHttpPort: Int,
     ): IntegrityDecodedVerdict {
-        val connection = (URL(verdictUrl).openConnection() as HttpURLConnection).apply {
+        val proxy = if (useActiveTunnelProxy && proxyHttpPort in 1..65535) {
+            Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyHttpPort))
+        } else {
+            Proxy.NO_PROXY
+        }
+
+        val connection = (URL(verdictUrl).openConnection(proxy) as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs

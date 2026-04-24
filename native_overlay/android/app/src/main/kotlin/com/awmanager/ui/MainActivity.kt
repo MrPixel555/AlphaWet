@@ -112,14 +112,22 @@ class MainActivity : FlutterActivity() {
 
     private fun performPostConnectSecurityCheck(call: io.flutter.plugin.common.MethodCall): Map<String, Any?> {
         val configId = call.argument<String>("configId") ?: "unknown"
+        val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
+        val httpPort = call.argument<Int>("httpPort") ?: 10808
 
         try {
-            return securityPolicyEnforcer.performPostConnectPolicy(configId)
+            return securityPolicyEnforcer.performPostConnectPolicy(
+                configId = configId,
+                enableDeviceVpn = enableDeviceVpn,
+                httpPort = httpPort,
+            )
         } catch (error: Throwable) {
             runCatching {
                 bridge.stopCore(io.flutter.plugin.common.MethodCall("stopCore", mapOf("configId" to configId)))
             }
-            closeApplicationPermanently()
+            if (SecurityLockStore.isLocked(applicationContext)) {
+                closeApplicationPermanently()
+            }
             throw error
         }
     }

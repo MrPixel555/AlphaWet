@@ -10,7 +10,7 @@ import java.net.Proxy
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
-private data class IntegrityDecodedVerdict(
+internal data class IntegrityDecodedVerdict(
     val requestPackageName: String,
     val requestHash: String,
     val requestTimestampMillis: Long,
@@ -22,7 +22,7 @@ private data class IntegrityDecodedVerdict(
     val rawPayload: String,
 )
 
-object IntegrityVerdictHttpClient {
+internal object IntegrityVerdictHttpClient {
     private const val connectTimeoutMs = 12_000
     private const val readTimeoutMs = 20_000
 

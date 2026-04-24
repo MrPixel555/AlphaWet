@@ -10,14 +10,14 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-private data class IntegrityCheckRequestData(
+internal data class IntegrityCheckRequestData(
     val packageName: String,
     val configId: String,
     val issuedAtMillis: Long,
     val requestHash: String,
 )
 
-private object IntegrityCheckRequestFactory {
+internal object IntegrityCheckRequestFactory {
     fun create(context: Context, configId: String): IntegrityCheckRequestData {
         val issuedAtMillis = System.currentTimeMillis()
         val canonical = listOf(

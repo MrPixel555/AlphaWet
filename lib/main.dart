@@ -178,15 +178,41 @@ _TrafficFromStatus _trafficFromStatus(Map<Object?, Object?>? status) {
   if (status == null) {
     return const _TrafficFromStatus(upBytes: 0, downBytes: 0);
   }
-  int up = 0;
-  int down = 0;
-  up = _toInt(status['upBytes']) + _toInt(status['uplink']) + _toInt(status['uploadBytes']);
-  down = _toInt(status['downBytes']) + _toInt(status['downlink']) + _toInt(status['downloadBytes']);
+  int firstNonZero(List<Object?> values) {
+    for (final Object? value in values) {
+      final int parsed = _toInt(value);
+      if (parsed > 0) {
+        return parsed;
+      }
+    }
+    return 0;
+  }
+
+  int up = firstNonZero(<Object?>[
+    status['upBytes'],
+    status['uploadBytes'],
+    status['uplink'],
+  ]);
+  int down = firstNonZero(<Object?>[
+    status['downBytes'],
+    status['downloadBytes'],
+    status['downlink'],
+  ]);
   final Object? traffic = status['traffic'];
   if (traffic is Map<Object?, Object?>) {
-    up = up == 0 ? (_toInt(traffic['up']) + _toInt(traffic['uplink']) + _toInt(traffic['upload'])) : up;
+    up = up == 0
+        ? firstNonZero(<Object?>[
+            traffic['up'],
+            traffic['upload'],
+            traffic['uplink'],
+          ])
+        : up;
     down = down == 0
-        ? (_toInt(traffic['down']) + _toInt(traffic['downlink']) + _toInt(traffic['download']))
+        ? firstNonZero(<Object?>[
+            traffic['down'],
+            traffic['download'],
+            traffic['downlink'],
+          ])
         : down;
   }
   return _TrafficFromStatus(upBytes: up, downBytes: down);
@@ -626,10 +652,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
                   : (item.xrayBuildError ?? 'Core build failed.')),
           lastConnectedAt: isActive ? (item.lastConnectedAt ?? DateTime.now()) : item.lastConnectedAt,
-          uploadBytes: isActive ? (traffic.upBytes > item.uploadBytes ? traffic.upBytes : item.uploadBytes) : item.uploadBytes,
-          downloadBytes: isActive
-              ? (traffic.downBytes > item.downloadBytes ? traffic.downBytes : item.downloadBytes)
-              : item.downloadBytes,
+          uploadBytes: isActive ? traffic.upBytes : 0,
+          downloadBytes: isActive ? traffic.downBytes : 0,
         );
         if (next.isEnabled != item.isEnabled ||
             next.connectionState != item.connectionState ||
@@ -722,8 +746,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _setEntry(
           latest.id,
           latest.copyWith(
-            uploadBytes: traffic.upBytes > latest.uploadBytes ? traffic.upBytes : latest.uploadBytes,
-            downloadBytes: traffic.downBytes > latest.downloadBytes ? traffic.downBytes : latest.downloadBytes,
+            uploadBytes: traffic.upBytes,
+            downloadBytes: traffic.downBytes,
           ),
         );
         await _persistConfigs();
@@ -770,6 +794,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           connectionState: result.state,
           engineMessage: result.message,
           engineSessionId: null,
+          uploadBytes: 0,
+          downloadBytes: 0,
         ),
       );
     }
@@ -958,25 +984,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!value) {
-      _setEntry(
-        id,
-        current.copyWith(
-          connectionState: VpnConnectionState.disconnecting,
-          engineMessage: 'Stopping runtime core...',
-        ),
-      );
-      final VpnEngineResult result = await _vpnEngine.disconnect(current);
-      final ConfigEntry latest = _findEntryById(id) ?? current;
-      _setEntry(
-        id,
-        latest.copyWith(
-          isEnabled: false,
-          connectionState: result.state,
-          engineMessage: result.message,
-          engineSessionId: null,
-        ),
-      );
-      await _persistConfigs();
+      try {
+        _setEntry(
+          id,
+          current.copyWith(
+            connectionState: VpnConnectionState.disconnecting,
+            engineMessage: 'Stopping runtime core...',
+          ),
+        );
+        final VpnEngineResult result = await _vpnEngine.disconnect(current);
+        final ConfigEntry latest = _findEntryById(id) ?? current;
+        _setEntry(
+          id,
+          latest.copyWith(
+            isEnabled: false,
+            connectionState: result.state,
+            engineMessage: result.message,
+            engineSessionId: null,
+            uploadBytes: 0,
+            downloadBytes: 0,
+          ),
+        );
+        await _persistConfigs();
+      } catch (error, stackTrace) {
+        _logger.error('HomeScreen', 'Disconnect failed unexpectedly.', error: error, stackTrace: stackTrace);
+        final ConfigEntry latest = _findEntryById(id) ?? current;
+        _setEntry(
+          id,
+          latest.copyWith(
+            isEnabled: false,
+            connectionState: VpnConnectionState.failed,
+            engineMessage: 'Disconnect failed unexpectedly: $error',
+            engineSessionId: null,
+          ),
+        );
+      }
       return;
     }
 
@@ -1005,42 +1047,139 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _rebuildAllConfigsForRuntimeSettings();
     }
 
-    await _disconnectOtherConfigs(id);
+    try {
+      await _disconnectOtherConfigs(id);
 
-    List<int> busyPorts = await _findBusyProxyPorts(_runtimeSettings);
-    if (Platform.isWindows && busyPorts.isNotEmpty) {
-      await _clearBusyPortsOnWindows(busyPorts);
-      busyPorts = await _findBusyProxyPorts(_runtimeSettings);
-    }
-    if (busyPorts.isNotEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'AlphaWet could not start because these local ports are busy: ${busyPorts.join(', ')}',
+      List<int> busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+      if (Platform.isWindows && busyPorts.isNotEmpty) {
+        await _clearBusyPortsOnWindows(busyPorts);
+        busyPorts = await _findBusyProxyPorts(_runtimeSettings);
+      }
+      if (busyPorts.isNotEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'AlphaWet could not start because these local ports are busy: ${busyPorts.join(', ')}',
+              ),
             ),
+          );
+        }
+        final ConfigEntry latest = _findEntryById(id) ?? current;
+        _setEntry(
+          id,
+          latest.copyWith(
+            isEnabled: false,
+            connectionState: VpnConnectionState.failed,
+            engineMessage: 'Busy local ports: ${busyPorts.join(', ')}',
+            engineSessionId: null,
           ),
         );
+        return;
       }
-      final ConfigEntry latest = _findEntryById(id) ?? current;
+
+      final ConfigEntry? refreshedCurrent = _findEntryById(id);
+      if (refreshedCurrent == null) {
+        return;
+      }
+
+      if (Platform.isAndroid) {
+        final ConfigEntry authTarget = _findEntryById(id) ?? current;
+        _setEntry(
+          id,
+          authTarget.copyWith(
+            isEnabled: false,
+            connectionState: VpnConnectionState.validating,
+            engineMessage: _runtimeSettings.enableDeviceVpn
+                ? 'Authenticating through the target tunnel before exposing device internet...'
+                : 'Authenticating through the target proxy before marking the connection active...',
+            uploadBytes: 0,
+            downloadBytes: 0,
+          ),
+        );
+        final ConfigEntry validateTarget = _findEntryById(id) ?? authTarget;
+        final VpnEngineResult validateResult = await _vpnEngine.validate(validateTarget, _runtimeSettings);
+        final ConfigEntry afterValidate = _findEntryById(id) ?? authTarget;
+        _setEntry(
+          id,
+          afterValidate.copyWith(
+            isEnabled: false,
+            connectionState: validateResult.success ? VpnConnectionState.ready : VpnConnectionState.failed,
+            engineMessage: validateResult.success
+                ? 'Authentication passed. Bringing the main connection online...'
+                : validateResult.message,
+            lastValidatedAt: DateTime.now(),
+            uploadBytes: 0,
+            downloadBytes: 0,
+          ),
+        );
+        if (!validateResult.success) {
+          await _persistConfigs();
+          return;
+        }
+
+        final ConfigEntry readyToConnect = _findEntryById(id) ?? afterValidate;
+        _setEntry(
+          id,
+          readyToConnect.copyWith(
+            isEnabled: true,
+            connectionState: VpnConnectionState.connecting,
+            engineMessage: _runtimeSettings.enableDeviceVpn
+                ? 'Authentication passed. Starting AlphaWet device tunnel...'
+                : 'Authentication passed. Starting AlphaWet proxy...',
+            uploadBytes: 0,
+            downloadBytes: 0,
+          ),
+        );
+        final ConfigEntry connectTarget = _findEntryById(id) ?? readyToConnect;
+        final VpnEngineResult connectResult = await _vpnEngine.connect(connectTarget, _runtimeSettings);
+        final ConfigEntry afterConnect = _findEntryById(id) ?? readyToConnect;
+        _setEntry(
+          id,
+          afterConnect.copyWith(
+            isEnabled: connectResult.success,
+            connectionState: connectResult.state,
+            engineMessage: connectResult.message,
+            engineSessionId: connectResult.sessionId,
+            lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
+            uploadBytes: 0,
+            downloadBytes: 0,
+          ),
+        );
+        if (!connectResult.success) {
+          await _persistConfigs();
+          return;
+        }
+
+        await _persistConfigs();
+        return;
+      }
+
       _setEntry(
         id,
-        latest.copyWith(
-          isEnabled: false,
-          connectionState: VpnConnectionState.failed,
-          engineMessage: 'Busy local ports: ${busyPorts.join(', ')}',
-          engineSessionId: null,
+        refreshedCurrent.copyWith(
+          connectionState: VpnConnectionState.validating,
+          engineMessage: _runtimeSettings.enableDeviceVpn
+              ? 'Validating generated runtime config for $_deviceTunnelLabel mode...'
+              : 'Validating generated runtime config for Proxy mode...',
         ),
       );
-      return;
-    }
+      final ConfigEntry validateTarget = _findEntryById(id) ?? current;
+      final VpnEngineResult validateResult = await _vpnEngine.validate(validateTarget, _runtimeSettings);
+      final ConfigEntry afterValidate = _findEntryById(id) ?? current;
+      _setEntry(
+        id,
+        afterValidate.copyWith(
+          connectionState: validateResult.state,
+          engineMessage: validateResult.message,
+          lastValidatedAt: DateTime.now(),
+        ),
+      );
 
-    final ConfigEntry? refreshedCurrent = _findEntryById(id);
-    if (refreshedCurrent == null) {
-      return;
-    }
+      if (!validateResult.success) {
+        return;
+      }
 
-    if (Platform.isAndroid) {
       final ConfigEntry readyToConnect = _findEntryById(id) ?? current;
       _setEntry(
         id,
@@ -1048,8 +1187,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           isEnabled: true,
           connectionState: VpnConnectionState.connecting,
           engineMessage: _runtimeSettings.enableDeviceVpn
-              ? 'Starting AlphaWet warm-up tunnel before device integrity check...'
-              : 'Starting AlphaWet proxy before device integrity check...',
+              ? 'Starting AlphaWet in $_deviceTunnelLabel mode...'
+              : 'Starting AlphaWet in Proxy mode...',
+          lastValidatedAt: DateTime.now(),
+          uploadBytes: 0,
+          downloadBytes: 0,
         ),
       );
       final ConfigEntry connectTarget = _findEntryById(id) ?? readyToConnect;
@@ -1062,89 +1204,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           connectionState: connectResult.state,
           engineMessage: connectResult.message,
           engineSessionId: connectResult.sessionId,
-          lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
-        ),
-      );
-      if (!connectResult.success) {
-        await _persistConfigs();
-        return;
-      }
-
-      _setEntry(
-        id,
-        (_findEntryById(id) ?? afterConnect).copyWith(
-          connectionState: VpnConnectionState.connecting,
-          engineMessage: 'Connection is up. Running post-connect integrity and signature checks through the active tunnel...',
-        ),
-      );
-      final VpnEngineResult validateResult = await _vpnEngine.validate(_findEntryById(id) ?? afterConnect, _runtimeSettings);
-      final ConfigEntry afterValidate = _findEntryById(id) ?? afterConnect;
-      _setEntry(
-        id,
-        afterValidate.copyWith(
-          isEnabled: validateResult.success,
-          connectionState: validateResult.success ? VpnConnectionState.connected : VpnConnectionState.failed,
-          engineMessage: validateResult.message,
           lastValidatedAt: DateTime.now(),
-          lastConnectedAt: validateResult.success ? (afterValidate.lastConnectedAt ?? DateTime.now()) : afterValidate.lastConnectedAt,
+          lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
+          uploadBytes: 0,
+          downloadBytes: 0,
         ),
       );
       await _persistConfigs();
-      return;
+    } catch (error, stackTrace) {
+      _logger.error('HomeScreen', 'Connect flow failed unexpectedly.', error: error, stackTrace: stackTrace);
+      final ConfigEntry latest = _findEntryById(id) ?? current;
+      _setEntry(
+        id,
+        latest.copyWith(
+          isEnabled: false,
+          connectionState: VpnConnectionState.failed,
+          engineMessage: 'Connect failed unexpectedly: $error',
+          engineSessionId: null,
+        ),
+      );
+      await _persistConfigs();
     }
-
-    _setEntry(
-      id,
-      refreshedCurrent.copyWith(
-        connectionState: VpnConnectionState.validating,
-        engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Validating generated runtime config for $_deviceTunnelLabel mode...'
-            : 'Validating generated runtime config for Proxy mode...',
-      ),
-    );
-    final ConfigEntry validateTarget = _findEntryById(id) ?? current;
-    final VpnEngineResult validateResult = await _vpnEngine.validate(validateTarget, _runtimeSettings);
-    final ConfigEntry afterValidate = _findEntryById(id) ?? current;
-    _setEntry(
-      id,
-      afterValidate.copyWith(
-        connectionState: validateResult.state,
-        engineMessage: validateResult.message,
-        lastValidatedAt: DateTime.now(),
-      ),
-    );
-
-    if (!validateResult.success) {
-      return;
-    }
-
-    final ConfigEntry readyToConnect = _findEntryById(id) ?? current;
-    _setEntry(
-      id,
-      readyToConnect.copyWith(
-        isEnabled: true,
-        connectionState: VpnConnectionState.connecting,
-        engineMessage: _runtimeSettings.enableDeviceVpn
-            ? 'Starting AlphaWet in $_deviceTunnelLabel mode...'
-            : 'Starting AlphaWet in Proxy mode...',
-        lastValidatedAt: DateTime.now(),
-      ),
-    );
-    final ConfigEntry connectTarget = _findEntryById(id) ?? readyToConnect;
-    final VpnEngineResult connectResult = await _vpnEngine.connect(connectTarget, _runtimeSettings);
-    final ConfigEntry afterConnect = _findEntryById(id) ?? readyToConnect;
-    _setEntry(
-      id,
-      afterConnect.copyWith(
-        isEnabled: connectResult.success,
-        connectionState: connectResult.state,
-        engineMessage: connectResult.message,
-        engineSessionId: connectResult.sessionId,
-        lastValidatedAt: DateTime.now(),
-        lastConnectedAt: connectResult.success ? DateTime.now() : afterConnect.lastConnectedAt,
-      ),
-    );
-    await _persistConfigs();
   }
 
   ConfigEntry? _findEntryById(String id) {

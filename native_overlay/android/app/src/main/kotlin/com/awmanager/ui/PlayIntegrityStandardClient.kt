@@ -39,8 +39,8 @@ internal object IntegrityCheckRequestFactory {
 }
 
 object PlayIntegrityStandardClient {
-    private const val prepareTimeoutSeconds = 60L
-    private const val requestTimeoutSeconds = 20L
+    private const val prepareTimeoutSeconds = 15L
+    private const val requestTimeoutSeconds = 8L
 
     @Volatile
     private var tokenProvider: StandardIntegrityManager.StandardIntegrityTokenProvider? = null

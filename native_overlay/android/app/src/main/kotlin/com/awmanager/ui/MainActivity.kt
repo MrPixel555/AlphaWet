@@ -7,7 +7,6 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.Process
 import android.os.Environment
 import android.provider.Settings
 import android.content.pm.ActivityInfo
@@ -16,7 +15,6 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import kotlin.system.exitProcess
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -121,36 +119,21 @@ class MainActivity : FlutterActivity() {
 
     private fun performPostConnectSecurityCheck(call: io.flutter.plugin.common.MethodCall): Map<String, Any?> {
         val configId = call.argument<String>("configId") ?: "unknown"
-        val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
-        val httpPort = call.argument<Int>("httpPort") ?: 10808
+        call.argument<String>("configJson")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: throw IllegalArgumentException("configJson is required for authentication.")
 
         try {
-            return securityPolicyEnforcer.performPostConnectPolicy(
-                configId = configId,
-                enableDeviceVpn = enableDeviceVpn,
-                httpPort = httpPort,
-            )
+            val transientBundle = RuntimeBundleFactory.fromMethodCall(applicationContext, call)
+                .copy(enableDeviceVpn = false)
+            return XrayCoreRuntimeManager.authenticateViaTransientRuntime(transientBundle) { bundle ->
+                securityPolicyEnforcer.performPostConnectPolicy(
+                    configId = configId,
+                    enableDeviceVpn = false,
+                    httpPort = bundle.httpPort,
+                )
+            }
         } catch (error: Throwable) {
-            runCatching {
-                bridge.stopCore(io.flutter.plugin.common.MethodCall("stopCore", mapOf("configId" to configId)))
-            }
-            if (SecurityLockStore.isLocked(applicationContext)) {
-                closeApplicationPermanently()
-            }
             throw error
-        }
-    }
-
-    private fun closeApplicationPermanently() {
-        runOnUiThread {
-            runCatching {
-                finishAndRemoveTask()
-            }
-            runCatching {
-                finishAffinity()
-            }
-            Process.killProcess(Process.myPid())
-            exitProcess(0)
         }
     }
 

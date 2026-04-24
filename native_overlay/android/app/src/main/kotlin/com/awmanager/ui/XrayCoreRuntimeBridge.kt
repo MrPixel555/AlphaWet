@@ -565,8 +565,10 @@ object XrayCoreRuntimeManager {
         }
         val tx = appTxBytes()
         val rx = appRxBytes()
-        val upBytes = (tx - trafficBaseTxBytes).coerceAtLeast(0L)
-        val downBytes = (rx - trafficBaseRxBytes).coerceAtLeast(0L)
+        val rawUpBytes = (tx - trafficBaseTxBytes).coerceAtLeast(0L)
+        val rawDownBytes = (rx - trafficBaseRxBytes).coerceAtLeast(0L)
+        val upBytes = if (currentDeviceVpnMode) 0L else rawUpBytes
+        val downBytes = if (currentDeviceVpnMode) 0L else rawDownBytes
 
         mapOf(
             "state" to if (running) "running" else lastState,
@@ -654,6 +656,62 @@ object XrayCoreRuntimeManager {
             }
             val result = pingProxy(httpPort = bundle.httpPort, url = url)
             return result + mapOf("logFilePath" to bundle.logFile.absolutePath)
+        } finally {
+            XrayNativeBridge.stop(pid)
+        }
+    }
+
+    fun authenticateViaTransientRuntime(
+        bundle: RuntimeBundle,
+        block: (RuntimeBundle) -> Map<String, Any?>,
+    ): Map<String, Any?> {
+        val pid = XrayNativeBridge.start(
+            bundle.binaryFile.absolutePath,
+            bundle.configFile.absolutePath,
+            bundle.assetDir.absolutePath,
+            bundle.workDir.absolutePath,
+            bundle.logFile.absolutePath,
+            -1,
+        )
+        if (pid <= 0L || !XrayNativeBridge.isRunning(pid)) {
+            val outputTail = tailLog(bundle.logFile)
+            return mapOf(
+                "success" to false,
+                "state" to "failed",
+                "message" to buildString {
+                    append("Failed to launch a transient Xray runtime for authentication")
+                    if (pid < 0L) {
+                        append(" (errno=")
+                        append(-pid)
+                        append(')')
+                    }
+                    append('.')
+                    if (outputTail.isNotBlank()) {
+                        append('\n')
+                        append(outputTail)
+                    }
+                },
+                "logFilePath" to bundle.logFile.absolutePath,
+            )
+        }
+        try {
+            val ready = waitForLoopbackListener(port = bundle.httpPort, timeoutMs = 5_000)
+            if (!ready) {
+                val outputTail = tailLog(bundle.logFile)
+                return mapOf(
+                    "success" to false,
+                    "state" to "failed",
+                    "message" to buildString {
+                        append("Timed out while preparing a transient Xray runtime for authentication.")
+                        if (outputTail.isNotBlank()) {
+                            append('\n')
+                            append(outputTail)
+                        }
+                    },
+                    "logFilePath" to bundle.logFile.absolutePath,
+                )
+            }
+            return block(bundle) + mapOf("logFilePath" to bundle.logFile.absolutePath)
         } finally {
             XrayNativeBridge.stop(pid)
         }

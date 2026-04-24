@@ -35,12 +35,13 @@ class MainActivity : FlutterActivity() {
         )
         runCatching {
             securityPolicyEnforcer.enforceStartupPolicy()
-            securityPolicyEnforcer.warmUpIntegrityProviderIfConfigured()
         }.onFailure { error ->
             val reason = error.message ?: error.javaClass.simpleName
             Log.e(logTag, "Startup security check failed: $reason", error)
             showStartupFailureDialog(reason)
+            return
         }
+        warmUpIntegrityProviderAsync()
     }
 
     private lateinit var bridge: XrayCoreRuntimeBridge
@@ -151,6 +152,20 @@ class MainActivity : FlutterActivity() {
             Process.killProcess(Process.myPid())
             exitProcess(0)
         }
+    }
+
+    private fun warmUpIntegrityProviderAsync() {
+        Thread {
+            runCatching {
+                securityPolicyEnforcer.warmUpIntegrityProviderIfConfigured()
+            }.onFailure { error ->
+                Log.w(
+                    logTag,
+                    "Play Integrity warm-up failed: ${error.message ?: error.javaClass.simpleName}",
+                    error,
+                )
+            }
+        }.start()
     }
 
     private fun showStartupFailureDialog(reason: String) {

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.os.Environment
 import android.provider.Settings
 import android.content.pm.ActivityInfo
@@ -13,6 +14,7 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlin.system.exitProcess
 
 class MainActivity : FlutterActivity() {
     private lateinit var securityPolicyEnforcer: SecurityPolicyEnforcer
@@ -27,6 +29,7 @@ class MainActivity : FlutterActivity() {
         )
         runCatching {
             securityPolicyEnforcer.enforceStartupPolicy()
+            securityPolicyEnforcer.warmUpIntegrityProviderIfConfigured()
         }.onFailure {
             finishAffinity()
         }
@@ -109,35 +112,28 @@ class MainActivity : FlutterActivity() {
 
     private fun performPostConnectSecurityCheck(call: io.flutter.plugin.common.MethodCall): Map<String, Any?> {
         val configId = call.argument<String>("configId") ?: "unknown"
-        val enableDeviceVpn = call.argument<Boolean>("enableDeviceVpn") == true
-        val vpnPermissionGranted = call.argument<Boolean>("vpnPermissionGranted") == true
-        val configJson = call.argument<String>("configJson")
-        val httpPort = call.argument<Int>("httpPort") ?: 10808
-        val socksPort = call.argument<Int>("socksPort") ?: 10809
 
         try {
-            val integrity = securityPolicyEnforcer.performPostConnectPolicy(configId)
-            if (enableDeviceVpn && vpnPermissionGranted && !configJson.isNullOrBlank()) {
-                return bridge.startCore(
-                    io.flutter.plugin.common.MethodCall(
-                        "startCore",
-                        mapOf(
-                            "configId" to configId,
-                            "displayName" to (call.argument<String>("displayName") ?: configId),
-                            "configJson" to configJson,
-                            "httpPort" to httpPort,
-                            "socksPort" to socksPort,
-                            "enableDeviceVpn" to true,
-                        ),
-                    ),
-                )
-            }
-            return integrity
+            return securityPolicyEnforcer.performPostConnectPolicy(configId)
         } catch (error: Throwable) {
             runCatching {
                 bridge.stopCore(io.flutter.plugin.common.MethodCall("stopCore", mapOf("configId" to configId)))
             }
+            closeApplicationPermanently()
             throw error
+        }
+    }
+
+    private fun closeApplicationPermanently() {
+        runOnUiThread {
+            runCatching {
+                finishAndRemoveTask()
+            }
+            runCatching {
+                finishAffinity()
+            }
+            Process.killProcess(Process.myPid())
+            exitProcess(0)
         }
     }
 

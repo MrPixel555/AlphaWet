@@ -43,7 +43,8 @@ done
 echo "[OK] Applied Kotlin overlay to ${TARGET_KT_DIR}"
 
 if [ -f "${OVERLAY_APP_DIR}/proguard-rules.pro" ]; then
-  cp -f "${OVERLAY_APP_DIR}/proguard-rules.pro" "${ANDROID_DIR}/app/proguard-rules.pro"
+  sed "s/^\\-keep class com\\.awmanager\\.\\*\\* { \\*; }$/-keep class ${PACKAGE_NAME}.** { *; }/" \
+    "${OVERLAY_APP_DIR}/proguard-rules.pro" > "${ANDROID_DIR}/app/proguard-rules.pro"
   echo "[OK] Applied Android obfuscation rules to ${ANDROID_DIR}/app/proguard-rules.pro"
 fi
 
@@ -146,7 +147,7 @@ if 'isMinifyEnabled = true' not in text and 'buildTypes {' in text:
 if 'buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
     text = text.replace(
 		'defaultConfig {\n',
-		'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        val expectedSigningCertSha256 = (project.findProperty("EXPECTED_SIGNING_CERT_SHA256") as String?) ?: ""\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n        buildConfigField("String", "EXPECTED_SIGNING_CERT_SHA256", "\\\"${expectedSigningCertSha256}\\\"")\n',
+		'defaultConfig {\n        val playCloudProjectNumber = (project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") as String?) ?: "0"\n        val expectedSigningCertSha256 = (project.findProperty("EXPECTED_SIGNING_CERT_SHA256") as String?) ?: ""\n        val playIntegrityVerdictUrl = (project.findProperty("PLAY_INTEGRITY_VERDICT_URL") as String?) ?: ""\n        buildConfigField("long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L")\n        buildConfigField("String", "EXPECTED_SIGNING_CERT_SHA256", "\\"${expectedSigningCertSha256}\\"")\n        buildConfigField("String", "PLAY_INTEGRITY_VERDICT_URL", "\\"${playIntegrityVerdictUrl}\\"")\n',
         1,
     )
 if 'buildFeatures {' in text and 'buildConfig = true' not in text:
@@ -185,7 +186,7 @@ if 'minifyEnabled true' not in text and 'buildTypes {' in text:
 if 'buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER"' not in text and 'defaultConfig {' in text:
     text = text.replace(
         'defaultConfig {\n',
-        'defaultConfig {\n        def playCloudProjectNumber = project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") ?: "0"\n        def expectedSigningCertSha256 = project.findProperty("EXPECTED_SIGNING_CERT_SHA256") ?: ""\n        buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L"\n        buildConfigField "String", "EXPECTED_SIGNING_CERT_SHA256", "\"${expectedSigningCertSha256}\""\n',
+        'defaultConfig {\n        def playCloudProjectNumber = project.findProperty("PLAY_CLOUD_PROJECT_NUMBER") ?: "0"\n        def expectedSigningCertSha256 = project.findProperty("EXPECTED_SIGNING_CERT_SHA256") ?: ""\n        def playIntegrityVerdictUrl = project.findProperty("PLAY_INTEGRITY_VERDICT_URL") ?: ""\n        buildConfigField "long", "PLAY_CLOUD_PROJECT_NUMBER", "${playCloudProjectNumber}L"\n        buildConfigField "String", "EXPECTED_SIGNING_CERT_SHA256", "\"${expectedSigningCertSha256}\""\n        buildConfigField "String", "PLAY_INTEGRITY_VERDICT_URL", "\"${playIntegrityVerdictUrl}\""\n',
         1,
     )
 if 'com.google.android.play:integrity' not in text:

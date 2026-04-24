@@ -1,0 +1,6 @@
+name = "alphawet-play-integrity"
+main = "src/index.js"
+compatibility_date = "2025-04-24"
+
+[observability]
+enabled = true

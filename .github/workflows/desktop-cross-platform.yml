@@ -53,9 +53,14 @@ jobs:
         run: |
           flutter create \
             --platforms=${{ matrix.target }} \
-            --project-name AlphaWet \
+            --project-name alphawet \
             --org ir.alphacraft.alphawet \
             .
+
+      - name: Apply desktop branding
+        shell: bash
+        run: |
+          python3 tool/apply_platform_branding.py "$GITHUB_WORKSPACE" "${{ matrix.target }}"
 
       - name: Configure Windows UAC elevation for TUN routing
         if: matrix.target == 'windows'

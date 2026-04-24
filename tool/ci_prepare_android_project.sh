@@ -37,6 +37,7 @@ PY
 fi
 
 bash "${BUILD_ROOT}/tool/prepare_android_runtime.sh" "${BUILD_ROOT}"
+python3 "${BUILD_ROOT}/tool/apply_platform_branding.py" "${BUILD_ROOT}" android
 bash "${BUILD_ROOT}/tool/verify_xray_assets.sh" "${BUILD_ROOT}"
 
 echo "[OK] Android project prepared at ${BUILD_ROOT}"

@@ -1,5 +1,10 @@
 # AlphaWet
 
+## Play Integrity verifier
+
+Android secure integrity mode now expects a verdict decode endpoint.
+Use the free-tier Cloudflare Worker guide in `docs/play-integrity-cloudflare-worker.md`.
+
 A Flutter Material 3 app for importing `.aw` configs, building Xray JSON, and launching Xray runtimes for Android and desktop.
 
 ## What this build does

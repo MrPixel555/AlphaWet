@@ -29,7 +29,6 @@ class XrayCoreRuntimeBridge(private val context: Context) {
 
     fun startCore(call: MethodCall): Map<String, Any?> {
         RuntimeSecurityGuard.enforceRuntimeSecurity(context)
-        PlayIntegrityVerifier.requireStrongIntegrity(context)
         val bundle = RuntimeBundleFactory.fromMethodCall(context, call)
         requestVpnServiceStop()
         requestProxyServiceStop()

@@ -1,13 +1,13 @@
 package com.awmanager.ui
 
 import android.content.Context
-import com.google.android.play.core.integrity.IntegrityManagerFactory
-import com.google.android.play.core.integrity.IntegrityTokenRequest
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
-import java.util.Base64
 
 class SecurityPolicyEnforcer(private val context: Context) {
+    companion object {
+        private const val requiredDeviceIntegrityLabel = "MEETS_DEVICE_INTEGRITY"
+        private const val maxVerdictAgeMillis = 2 * 60 * 1000L
+    }
+
     fun enforceStartupPolicy() {
         if (SecurityLockStore.isLocked(context)) {
             throw SecurityException(SecurityLockStore.reason(context))
@@ -23,43 +23,93 @@ class SecurityPolicyEnforcer(private val context: Context) {
         RuntimeSecurityGuard.enforceRuntimeSecurity(context)
     }
 
-    fun performPostConnectPolicy(configId: String): Map<String, Any?> {
-        enforceStartupPolicy()
+    fun warmUpIntegrityProviderIfConfigured() {
         val cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER
         if (cloudProjectNumber <= 0L) {
-            return mapOf(
-                "success" to true,
-                "state" to "connected",
-                "message" to "Connected. Play Integrity cloud project number is not configured, so local policy checks passed.",
-            )
+            return
         }
-        val nonceDigest = MessageDigest.getInstance("SHA-256")
-            .digest((context.packageName + ":" + configId + ":" + System.currentTimeMillis()).toByteArray(StandardCharsets.UTF_8))
-        val nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceDigest)
-        val manager = IntegrityManagerFactory.create(context)
-        val response = try {
-            com.google.android.gms.tasks.Tasks.await(
-                manager.requestIntegrityToken(
-                    IntegrityTokenRequest.builder()
-                        .setCloudProjectNumber(cloudProjectNumber)
-                        .setNonce(nonce)
-                        .build(),
-                ),
+        PlayIntegrityStandardClient.warmUp(context, cloudProjectNumber)
+    }
+
+    fun performPostConnectPolicy(configId: String): Map<String, Any?> {
+        enforceStartupPolicy()
+
+        val cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER
+        if (cloudProjectNumber <= 0L) {
+            SecurityLockStore.markLocked(context, "PLAY_CLOUD_PROJECT_NUMBER_MISSING")
+            throw SecurityException("PLAY_CLOUD_PROJECT_NUMBER_MISSING")
+        }
+
+        val verdictUrl = BuildConfig.PLAY_INTEGRITY_VERDICT_URL.trim()
+        if (verdictUrl.isBlank()) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_VERDICT_ENDPOINT_MISSING")
+            throw SecurityException("INTEGRITY_VERDICT_ENDPOINT_MISSING")
+        }
+
+        val requestData = IntegrityCheckRequestFactory.create(context, configId)
+        val integrityToken = try {
+            PlayIntegrityStandardClient.requestToken(
+                context = context,
+                cloudProjectNumber = cloudProjectNumber,
+                requestHash = requestData.requestHash,
             )
         } catch (error: Throwable) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_REQUEST_FAILED")
-            throw SecurityException("INTEGRITY_REQUEST_FAILED")
+            SecurityLockStore.markLocked(context, "INTEGRITY_TOKEN_REQUEST_FAILED")
+            throw SecurityException("INTEGRITY_TOKEN_REQUEST_FAILED")
         }
-        val token = response.token()
-        if (token.isNullOrBlank()) {
-            SecurityLockStore.markLocked(context, "INTEGRITY_TOKEN_EMPTY")
-            throw SecurityException("INTEGRITY_TOKEN_EMPTY")
+
+        val decoded = try {
+            IntegrityVerdictHttpClient.decodeAndValidate(
+                verdictUrl = verdictUrl,
+                requestData = requestData,
+                integrityToken = integrityToken,
+                requiredLabel = requiredDeviceIntegrityLabel,
+            )
+        } catch (error: Throwable) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_VERDICT_DECODE_FAILED")
+            throw SecurityException("INTEGRITY_VERDICT_DECODE_FAILED")
         }
+
+        if (decoded.requestPackageName != context.packageName) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_PACKAGE_NAME_MISMATCH")
+            throw SecurityException("INTEGRITY_PACKAGE_NAME_MISMATCH")
+        }
+        if (!decoded.allowed) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_BACKEND_POLICY_REJECTED")
+            throw SecurityException("INTEGRITY_BACKEND_POLICY_REJECTED")
+        }
+        if (decoded.requestHash != requestData.requestHash) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_REQUEST_HASH_MISMATCH")
+            throw SecurityException("INTEGRITY_REQUEST_HASH_MISMATCH")
+        }
+        val now = System.currentTimeMillis()
+        if (decoded.requestTimestampMillis <= 0L || now - decoded.requestTimestampMillis > maxVerdictAgeMillis) {
+            SecurityLockStore.markLocked(context, "INTEGRITY_TOKEN_STALE")
+            throw SecurityException("INTEGRITY_TOKEN_STALE")
+        }
+        if (!decoded.appRecognitionVerdict.contains("PLAY_RECOGNIZED")) {
+            SecurityLockStore.markLocked(context, "APP_INTEGRITY_NOT_RECOGNIZED")
+            throw SecurityException("APP_INTEGRITY_NOT_RECOGNIZED")
+        }
+        if (!decoded.meetsDeviceIntegrity) {
+            val reason = if (decoded.deviceRecognitionVerdict.isEmpty()) {
+                "DEVICE_INTEGRITY_BELOW_MEETS_DEVICE_INTEGRITY"
+            } else {
+                "DEVICE_INTEGRITY_BELOW_MEETS_DEVICE_INTEGRITY:${decoded.deviceRecognitionVerdict.joinToString("|")}"
+            }
+            SecurityLockStore.markLocked(context, reason)
+            throw SecurityException(reason)
+        }
+
         return mapOf(
             "success" to true,
             "state" to "connected",
-            "message" to "Connected. Post-connect integrity check passed.",
-            "integrityTokenLength" to token.length,
+            "message" to "Connected. Post-connect integrity verdict passed.",
+            "requiredDeviceIntegrityLabel" to requiredDeviceIntegrityLabel,
+            "deviceRecognitionVerdict" to decoded.deviceRecognitionVerdict.toList(),
+            "appRecognitionVerdict" to decoded.appRecognitionVerdict.toList(),
+            "certificateSha256Digest" to decoded.certificateDigests.toList(),
+            "requestTimestampMillis" to decoded.requestTimestampMillis,
         )
     }
 }

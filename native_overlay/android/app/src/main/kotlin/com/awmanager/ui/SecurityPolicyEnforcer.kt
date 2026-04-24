@@ -76,7 +76,9 @@ class SecurityPolicyEnforcer(private val context: Context) {
                 requestHash = requestData.requestHash,
             )
         } catch (error: Throwable) {
-            throw SecurityException("INTEGRITY_TOKEN_REQUEST_FAILED")
+            throw SecurityException(
+                "INTEGRITY_TOKEN_REQUEST_FAILED: ${error.message ?: error.javaClass.simpleName}",
+            )
         }
 
         val decoded = try {
@@ -94,22 +96,38 @@ class SecurityPolicyEnforcer(private val context: Context) {
 
         if (decoded.requestPackageName != context.packageName) {
             SecurityLockStore.markLocked(context, "INTEGRITY_PACKAGE_NAME_MISMATCH")
-            throw SecurityException("INTEGRITY_PACKAGE_NAME_MISMATCH")
+            throw SecurityException(
+                "INTEGRITY_PACKAGE_NAME_MISMATCH: expected=${context.packageName}, actual=${decoded.requestPackageName}",
+            )
         }
         if (!decoded.allowed) {
             SecurityLockStore.markLocked(context, "INTEGRITY_BACKEND_POLICY_REJECTED")
-            throw SecurityException("INTEGRITY_BACKEND_POLICY_REJECTED")
+            throw SecurityException(
+                buildString {
+                    appendLine("INTEGRITY_BACKEND_POLICY_REJECTED")
+                    appendLine("deviceRecognitionVerdict=${decoded.deviceRecognitionVerdict.joinToString("|")}")
+                    appendLine("appRecognitionVerdict=${decoded.appRecognitionVerdict.joinToString("|")}")
+                    appendLine("certificateSha256Digest=${decoded.certificateDigests.joinToString("|")}")
+                    append("rawPayload=${decoded.rawPayload}")
+                },
+            )
         }
         if (decoded.requestHash != requestData.requestHash) {
-            throw SecurityException("INTEGRITY_REQUEST_HASH_MISMATCH")
+            throw SecurityException(
+                "INTEGRITY_REQUEST_HASH_MISMATCH: expected=${requestData.requestHash}, actual=${decoded.requestHash}",
+            )
         }
         val now = System.currentTimeMillis()
         if (decoded.requestTimestampMillis <= 0L || now - decoded.requestTimestampMillis > maxVerdictAgeMillis) {
-            throw SecurityException("INTEGRITY_TOKEN_STALE")
+            throw SecurityException(
+                "INTEGRITY_TOKEN_STALE: now=$now, verdictTs=${decoded.requestTimestampMillis}, ageMs=${now - decoded.requestTimestampMillis}",
+            )
         }
         if (!decoded.appRecognitionVerdict.contains("PLAY_RECOGNIZED")) {
             SecurityLockStore.markLocked(context, "APP_INTEGRITY_NOT_RECOGNIZED")
-            throw SecurityException("APP_INTEGRITY_NOT_RECOGNIZED")
+            throw SecurityException(
+                "APP_INTEGRITY_NOT_RECOGNIZED: ${decoded.appRecognitionVerdict.joinToString("|")}",
+            )
         }
         if (!decoded.meetsDeviceIntegrity) {
             val reason = if (decoded.deviceRecognitionVerdict.isEmpty()) {

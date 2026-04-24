@@ -44,7 +44,13 @@ class XrayCoreVpnEngine implements VpnEngine {
         httpPort: runtimeSettings.httpPort,
         socksPort: runtimeSettings.socksPort,
       );
-      return _fromChannel(raw);
+      final VpnEngineResult result = _fromChannel(raw);
+      if (result.success) {
+        _logger.info(_tag, 'Android post-connect security policy passed. ${result.message}');
+      } else {
+        _logger.error(_tag, 'Android post-connect security policy failed: ${result.message}');
+      }
+      return result;
     } on MissingPluginException {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,
@@ -97,7 +103,13 @@ class XrayCoreVpnEngine implements VpnEngine {
           'enableDeviceVpn': runtimeSettings.enableDeviceVpn,
         },
       );
-      return _fromChannel(raw);
+      final VpnEngineResult result = _fromChannel(raw);
+      if (result.success) {
+        _logger.info(_tag, 'Android runtime started. ${result.message}');
+      } else {
+        _logger.error(_tag, 'Android runtime start failed: ${result.message}');
+      }
+      return result;
     } on MissingPluginException {
       return const VpnEngineResult(
         state: VpnConnectionState.failed,

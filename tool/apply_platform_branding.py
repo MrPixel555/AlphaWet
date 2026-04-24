@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 try:
     from PIL import Image, ImageDraw
@@ -16,6 +17,9 @@ PACKAGE_NAME = "ir.alphacraft.alphawet"
 ASSET_DIR = Path("assets/common/logo")
 ICO_NAME = "applogo.ico"
 IN_APP_NAME = "inapplogo.png"
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+
+ET.register_namespace("android", ANDROID_NS)
 
 
 def ensure_logo_assets(repo_root: Path) -> tuple[Path, Path]:
@@ -84,14 +88,12 @@ def apply_android_branding(repo_root: Path, png_path: Path) -> None:
 
     manifest_path = android_main / "AndroidManifest.xml"
     if manifest_path.exists():
-        text = manifest_path.read_text(encoding="utf-8")
-        if 'android:label="@string/app_name"' not in text:
-            text = text.replace(
-                "<application",
-                '<application android:label="@string/app_name"',
-                1,
-            )
-        manifest_path.write_text(text, encoding="utf-8")
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+        application = root.find("application")
+        if application is not None:
+            application.set(f"{{{ANDROID_NS}}}label", "@string/app_name")
+        tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
 
     for density, size in {
         "mipmap-mdpi": 48,

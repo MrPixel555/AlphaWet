@@ -13,7 +13,7 @@ jobs:
       AW_INCLUDE_X86_64: '1'
 
       ORG_GRADLE_PROJECT_PLAY_CLOUD_PROJECT_NUMBER: '939996477634'
-      ORG_GRADLE_PROJECT_EXPECTED_SIGNING_CERT_SHA256: '47b4e06477796fbbeecaf03ce8318d5bd1744115bf40590f918fd9d2d5a8df47'
+      ORG_GRADLE_PROJECT_EXPECTED_SIGNING_CERT_SHA256: '47B4E06477796FBBEECAF03CE8318D5BD1744115BF40590F918FD9D2D5A8DF47'
       ORG_GRADLE_PROJECT_PLAY_INTEGRITY_VERDICT_URL: 'https://alphawet.kasra-rahimbeiky.workers.dev/decode'
 
       AW_ANDROID_KEYSTORE_PASSWORD: "K7m9Lp1R_x2!'"
@@ -43,6 +43,9 @@ jobs:
           flutter --version
           dart --version
           java -version
+
+      - name: Install Pillow for branding pipeline
+        run: python3 -m pip install --user Pillow
 
       - name: Validate required signing inputs exist
         run: |

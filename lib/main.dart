@@ -636,11 +636,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final List<ConfigEntry> updated = <ConfigEntry>[];
       for (final ConfigEntry item in _configs) {
         final bool isActive = running && activeConfigId != null && item.id == activeConfigId;
+        final bool keepFailureState = !isActive && item.connectionState == VpnConnectionState.failed;
         final ConfigEntry next = item.copyWith(
           isEnabled: isActive,
           connectionState: isActive
               ? VpnConnectionState.connected
-              : (item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed),
+              : keepFailureState
+                  ? VpnConnectionState.failed
+                  : (item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed),
           engineSessionId: isActive ? sessionId : null,
           engineMessage: isActive
               ? (message.isNotEmpty
@@ -648,9 +651,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   : (deviceVpnMode
                       ? 'AlphaWet $_deviceTunnelLabel session is already active.'
                       : 'AlphaWet proxy session is already active.'))
-              : (item.isXrayReady
-                  ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
-                  : (item.xrayBuildError ?? 'Core build failed.')),
+              : keepFailureState
+                  ? item.engineMessage
+                  : (item.isXrayReady
+                      ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
+                      : (item.xrayBuildError ?? 'Core build failed.')),
           lastConnectedAt: isActive ? (item.lastConnectedAt ?? DateTime.now()) : item.lastConnectedAt,
           uploadBytes: isActive ? traffic.upBytes : 0,
           downloadBytes: isActive ? traffic.downBytes : 0,
@@ -1114,6 +1119,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         );
         if (!validateResult.success) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(validateResult.message)),
+            );
+          }
           await _persistConfigs();
           return;
         }

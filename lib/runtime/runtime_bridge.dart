@@ -63,6 +63,13 @@ class RuntimeBridge {
           'httpPort': httpPort,
           'socksPort': socksPort,
         },
+      ).timeout(
+        const Duration(seconds: 18),
+        onTimeout: () => <Object?, Object?>{
+          'success': false,
+          'state': 'failed',
+          'message': 'Authentication timed out before AlphaWet could mark the connection active.',
+        },
       );
     } on MissingPluginException {
       return <Object?, Object?>{'success': false, 'state': 'failed', 'message': 'Android runtime bridge is missing.'};

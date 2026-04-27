@@ -2,8 +2,10 @@ const PLAY_INTEGRITY_SCOPE = 'https://www.googleapis.com/auth/playintegrity';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DEFAULT_REQUIRED_LABEL = 'MEETS_DEVICE_INTEGRITY';
 const DEFAULT_MAX_TOKEN_AGE_MS = 120000;
+const RECENT_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 let cachedAccessToken = null;
+const recentDecodedTokens = new Map();
 
 export default {
   async fetch(request, env) {
@@ -35,6 +37,7 @@ async function handleDecode(request, env) {
   const integrityToken = stringValue(body.integrityToken);
   const requestHash = stringValue(body.requestHash);
   const packageName = stringValue(body.packageName);
+  const tokenFingerprint = await sha256Hex(integrityToken);
 
   if (!integrityToken) {
     return jsonResponse({ok: false, error: 'integrityToken is required'}, 400);
@@ -49,6 +52,18 @@ async function handleDecode(request, env) {
   const expectedPackageName = stringValue(env.ALPHAWET_EXPECTED_PACKAGE_NAME) || packageName;
   if (expectedPackageName !== packageName) {
     return jsonResponse({ok: false, error: 'packageName mismatch with service policy'}, 403);
+  }
+
+  evictExpiredRecentTokens();
+  const cachedVerdict = recentDecodedTokens.get(tokenFingerprint);
+  if (cachedVerdict) {
+    return jsonResponse({
+      ...cachedVerdict.payload,
+      replayDetected: true,
+      replaySource: 'worker-cache',
+      tokenFingerprint,
+      cachedAtMillis: cachedVerdict.createdAtMs,
+    });
   }
 
   try {
@@ -89,6 +104,12 @@ async function handleDecode(request, env) {
       env,
       packageName,
       requestHash,
+      tokenFingerprint,
+    });
+
+    recentDecodedTokens.set(tokenFingerprint, {
+      createdAtMs: Date.now(),
+      payload: verdict,
     });
 
     return jsonResponse(verdict);
@@ -100,7 +121,7 @@ async function handleDecode(request, env) {
   }
 }
 
-function evaluateDecodedVerdict({decodedResponse, env, packageName, requestHash}) {
+function evaluateDecodedVerdict({decodedResponse, env, packageName, requestHash, tokenFingerprint}) {
   const payload = decodedResponse?.tokenPayloadExternal ?? {};
   const requestDetails = payload?.requestDetails ?? {};
   const appIntegrity = payload?.appIntegrity ?? {};
@@ -122,6 +143,7 @@ function evaluateDecodedVerdict({decodedResponse, env, packageName, requestHash}
     item.toUpperCase(),
   );
   const nowMs = Date.now();
+  const tokenAgeMs = requestTimestampMillis > 0 ? nowMs - requestTimestampMillis : null;
 
   const packageMatches = requestPackageName === expectedPackageName;
   const requestHashMatches = decodedRequestHash === requestHash;
@@ -152,13 +174,32 @@ function evaluateDecodedVerdict({decodedResponse, env, packageName, requestHash}
     certificateSha256Digest: certificateDigests,
     packageMatches,
     requestHashMatches,
+    tokenAgeMs,
     freshEnough,
     appRecognized,
     certificateMatches,
+    tokenFingerprint,
     requiredDeviceLabel: requiredLabel,
     licensingVerdict: accountDetails.appLicensingVerdict ?? null,
     raw: decodedResponse,
   };
+}
+
+function evictExpiredRecentTokens() {
+  const nowMs = Date.now();
+  for (const [fingerprint, entry] of recentDecodedTokens.entries()) {
+    if (nowMs - entry.createdAtMs > RECENT_TOKEN_TTL_MS) {
+      recentDecodedTokens.delete(fingerprint);
+    }
+  }
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 async function getGoogleAccessToken(env) {

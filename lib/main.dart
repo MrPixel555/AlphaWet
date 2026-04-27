@@ -247,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final ConfigStore _configStore;
   Timer? _runtimeWatchdog;
   bool _isRecoveringRuntime = false;
+  String? _authInFlightConfigId;
   bool _isImporting = false;
   bool _isExportingLogs = false;
   bool _isLoadingRuntimeSettings = true;
@@ -637,13 +638,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       for (final ConfigEntry item in _configs) {
         final bool isActive = running && activeConfigId != null && item.id == activeConfigId;
         final bool keepFailureState = !isActive && item.connectionState == VpnConnectionState.failed;
+        final bool keepAuthState =
+            !isActive && _authInFlightConfigId != null && item.id == _authInFlightConfigId;
         final ConfigEntry next = item.copyWith(
           isEnabled: isActive,
           connectionState: isActive
               ? VpnConnectionState.connected
-              : keepFailureState
-                  ? VpnConnectionState.failed
-                  : (item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed),
+              : keepAuthState
+                  ? VpnConnectionState.validating
+                  : keepFailureState
+                      ? VpnConnectionState.failed
+                      : (item.isXrayReady ? VpnConnectionState.ready : VpnConnectionState.failed),
           engineSessionId: isActive ? sessionId : null,
           engineMessage: isActive
               ? (message.isNotEmpty
@@ -651,11 +656,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   : (deviceVpnMode
                       ? 'AlphaWet $_deviceTunnelLabel session is already active.'
                       : 'AlphaWet proxy session is already active.'))
-              : keepFailureState
+              : keepAuthState
                   ? item.engineMessage
-                  : (item.isXrayReady
-                      ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
-                      : (item.xrayBuildError ?? 'Core build failed.')),
+                  : keepFailureState
+                      ? item.engineMessage
+                      : (item.isXrayReady
+                          ? 'Core JSON built with ${_runtimeSettings.proxySummary}.'
+                          : (item.xrayBuildError ?? 'Core build failed.')),
           lastConnectedAt: isActive ? (item.lastConnectedAt ?? DateTime.now()) : item.lastConnectedAt,
           uploadBytes: isActive ? traffic.upBytes : 0,
           downloadBytes: isActive ? traffic.downBytes : 0,
@@ -725,7 +732,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _pollRuntimeHealth() async {
-    if (!mounted || _isRecoveringRuntime) {
+    if (!mounted || _isRecoveringRuntime || _authInFlightConfigId != null) {
       return;
     }
     ConfigEntry? active;
@@ -1090,6 +1097,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (Platform.isAndroid) {
         final ConfigEntry authTarget = _findEntryById(id) ?? current;
+        _authInFlightConfigId = id;
         _setEntry(
           id,
           authTarget.copyWith(
@@ -1119,6 +1127,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         );
         if (!validateResult.success) {
+          _authInFlightConfigId = null;
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(validateResult.message)),
@@ -1144,6 +1153,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final ConfigEntry connectTarget = _findEntryById(id) ?? readyToConnect;
         final VpnEngineResult connectResult = await _vpnEngine.connect(connectTarget, _runtimeSettings);
         final ConfigEntry afterConnect = _findEntryById(id) ?? readyToConnect;
+        _authInFlightConfigId = null;
         _setEntry(
           id,
           afterConnect.copyWith(
@@ -1222,6 +1232,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       await _persistConfigs();
     } catch (error, stackTrace) {
+      _authInFlightConfigId = null;
       _logger.error('HomeScreen', 'Connect flow failed unexpectedly.', error: error, stackTrace: stackTrace);
       final ConfigEntry latest = _findEntryById(id) ?? current;
       _setEntry(

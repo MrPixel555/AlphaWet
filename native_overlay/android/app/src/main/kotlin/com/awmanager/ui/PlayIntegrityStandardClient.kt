@@ -59,6 +59,7 @@ object PlayIntegrityStandardClient {
         cloudProjectNumber: Long,
         requestHash: String,
     ): String {
+        val startedAt = System.currentTimeMillis()
         return runCatching {
             val provider = ensureProvider(context, cloudProjectNumber, forceRefresh = false)
             requestToken(provider, requestHash)
@@ -66,7 +67,10 @@ object PlayIntegrityStandardClient {
             val provider = ensureProvider(context, cloudProjectNumber, forceRefresh = true)
             requestToken(provider, requestHash)
         }.getOrElse { error ->
-            throw SecurityException("Play Integrity token request failed: ${error.message}")
+            val elapsed = System.currentTimeMillis() - startedAt
+            throw SecurityException(
+                "Play Integrity token request failed after ${elapsed} ms: ${error.message}",
+            )
         }
     }
 
@@ -86,11 +90,21 @@ object PlayIntegrityStandardClient {
             val request = StandardIntegrityManager.PrepareIntegrityTokenRequest.builder()
                 .setCloudProjectNumber(cloudProjectNumber)
                 .build()
-            val provider = Tasks.await(
-                manager.prepareIntegrityToken(request),
-                prepareTimeoutSeconds,
-                TimeUnit.SECONDS,
-            )
+            val prepareStartedAt = System.currentTimeMillis()
+            val provider = try {
+                Tasks.await(
+                    manager.prepareIntegrityToken(request),
+                    prepareTimeoutSeconds,
+                    TimeUnit.SECONDS,
+                )
+            } catch (error: Throwable) {
+                val elapsed = System.currentTimeMillis() - prepareStartedAt
+                throw SecurityException(
+                    "Play Integrity provider preparation failed after ${elapsed} ms "
+                        + "(forceRefresh=$forceRefresh, cloudProjectNumber=$cloudProjectNumber): "
+                        + "${error.message ?: error.javaClass.simpleName}",
+                )
+            }
             tokenProvider = provider
             return provider
         }
@@ -103,11 +117,21 @@ object PlayIntegrityStandardClient {
         val request = StandardIntegrityManager.StandardIntegrityTokenRequest.builder()
             .setRequestHash(requestHash)
             .build()
-        val response = Tasks.await(
-            provider.request(request),
-            requestTimeoutSeconds,
-            TimeUnit.SECONDS,
-        )
+        val requestStartedAt = System.currentTimeMillis()
+        val response = try {
+            Tasks.await(
+                provider.request(request),
+                requestTimeoutSeconds,
+                TimeUnit.SECONDS,
+            )
+        } catch (error: Throwable) {
+            val elapsed = System.currentTimeMillis() - requestStartedAt
+            throw SecurityException(
+                "Play Integrity token provider.request failed after ${elapsed} ms "
+                    + "(requestHashPrefix=${requestHash.take(12)}): "
+                    + "${error.message ?: error.javaClass.simpleName}",
+            )
+        }
         val token = response.token().orEmpty().trim()
         if (token.isEmpty()) {
             throw SecurityException("Play Integrity returned an empty token.")

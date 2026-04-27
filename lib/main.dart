@@ -248,6 +248,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _runtimeWatchdog;
   bool _isRecoveringRuntime = false;
   String? _authInFlightConfigId;
+  bool _logExportPermissionDeniedOnce = false;
   bool _isImporting = false;
   bool _isExportingLogs = false;
   bool _isLoadingRuntimeSettings = true;
@@ -1339,6 +1340,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _isExportingLogs = true;
     });
     try {
+      if (Platform.isAndroid) {
+        final bool granted = await RuntimeBridge.ensureManageStoragePermission();
+        if (!granted) {
+          if (_logExportPermissionDeniedOnce) {
+            await RuntimeBridge.openAppSettings();
+          } else {
+            _logExportPermissionDeniedOnce = true;
+          }
+          if (!mounted) {
+            return;
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Storage permission is required to export logs. Please grant it and try again.'),
+            ),
+          );
+          return;
+        }
+        _logExportPermissionDeniedOnce = false;
+      }
       final file = await _logExportService.exportLogs();
       if (!mounted) {
         return;

@@ -8,6 +8,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
 import android.provider.Settings
 import android.content.pm.ActivityInfo
 import android.util.Log
@@ -58,6 +59,10 @@ class MainActivity : FlutterActivity() {
                 "ensureVpnPermission" -> ensureVpnPermission(result)
                 "isVpnPermissionGranted" -> result.success(isVpnPermissionGranted())
                 "ensureManageStoragePermission" -> ensureManageStoragePermission(result)
+                "openAppSettings" -> {
+                    openAppSettings()
+                    result.success(true)
+                }
                 "performPostConnectSecurityCheck" -> executeAsync(result) { performPostConnectSecurityCheck(call) }
                 "validateConfig" -> executeAsync(result) { bridge.validateConfig(call) }
                 "startCore" -> executeAsync(result) { bridge.startCore(call) }
@@ -115,6 +120,14 @@ class MainActivity : FlutterActivity() {
             }
         }
         result.success(Environment.isExternalStorageManager())
+    }
+
+    private fun openAppSettings() {
+        val intent = Intent(ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:$packageName")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
     }
 
     private fun performPostConnectSecurityCheck(call: io.flutter.plugin.common.MethodCall): Map<String, Any?> {

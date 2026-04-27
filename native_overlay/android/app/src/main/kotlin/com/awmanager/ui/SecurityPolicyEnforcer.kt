@@ -56,6 +56,7 @@ class SecurityPolicyEnforcer(private val context: Context) {
         enableDeviceVpn: Boolean,
         httpPort: Int,
     ): Map<String, Any?> {
+        val startedAt = System.currentTimeMillis()
         enforceStartupPolicy()
 
         val cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER
@@ -69,6 +70,7 @@ class SecurityPolicyEnforcer(private val context: Context) {
         }
 
         val requestData = IntegrityCheckRequestFactory.create(context, configId)
+        val tokenStartedAt = System.currentTimeMillis()
         val integrityToken = try {
             PlayIntegrityStandardClient.requestToken(
                 context = context,
@@ -76,11 +78,16 @@ class SecurityPolicyEnforcer(private val context: Context) {
                 requestHash = requestData.requestHash,
             )
         } catch (error: Throwable) {
+            val elapsed = System.currentTimeMillis() - tokenStartedAt
             throw SecurityException(
-                "INTEGRITY_TOKEN_REQUEST_FAILED: ${error.message ?: error.javaClass.simpleName}",
+                "INTEGRITY_TOKEN_REQUEST_FAILED: elapsedMs=$elapsed, "
+                    + "configId=$configId, cloudProjectNumber=$cloudProjectNumber, "
+                    + "requestHashPrefix=${requestData.requestHash.take(12)}, "
+                    + "message=${error.message ?: error.javaClass.simpleName}",
             )
         }
 
+        val verdictStartedAt = System.currentTimeMillis()
         val decoded = try {
             IntegrityVerdictHttpClient.decodeAndValidate(
                 verdictUrl = verdictUrl,
@@ -91,7 +98,14 @@ class SecurityPolicyEnforcer(private val context: Context) {
                 proxyHttpPort = httpPort,
             )
         } catch (error: Throwable) {
-            throw SecurityException("INTEGRITY_VERDICT_DECODE_FAILED:${error.message ?: "UNREACHABLE"}")
+            val elapsed = System.currentTimeMillis() - verdictStartedAt
+            throw SecurityException(
+                "INTEGRITY_VERDICT_DECODE_FAILED: elapsedMs=$elapsed, "
+                    + "configId=$configId, verdictUrl=$verdictUrl, "
+                    + "viaProxy=${!enableDeviceVpn}, proxyHttpPort=$httpPort, "
+                    + "requestHashPrefix=${requestData.requestHash.take(12)}, "
+                    + "message=${error.message ?: "UNREACHABLE"}",
+            )
         }
 
         if (decoded.requestPackageName != context.packageName) {
@@ -142,12 +156,13 @@ class SecurityPolicyEnforcer(private val context: Context) {
         return mapOf(
             "success" to true,
             "state" to "connected",
-            "message" to "Connected. Post-connect integrity verdict passed.",
+            "message" to "Connected. Post-connect integrity verdict passed. totalElapsedMs=${System.currentTimeMillis() - startedAt}",
             "requiredDeviceIntegrityLabel" to requiredDeviceIntegrityLabel,
             "deviceRecognitionVerdict" to decoded.deviceRecognitionVerdict.toList(),
             "appRecognitionVerdict" to decoded.appRecognitionVerdict.toList(),
             "certificateSha256Digest" to decoded.certificateDigests.toList(),
             "requestTimestampMillis" to decoded.requestTimestampMillis,
+            "requestHashPrefix" to requestData.requestHash.take(12),
         )
     }
 }

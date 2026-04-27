@@ -12,13 +12,20 @@ class AppLogExportService {
   static const String _tag = 'AppLogExportService';
 
   Future<File> exportLogs() async {
+    bool useFallbackDirectory = false;
     if (Platform.isAndroid) {
       final bool granted = await RuntimeBridge.ensureManageStoragePermission();
       if (!granted) {
-        throw const FileSystemException('Storage permission was not granted for log export.');
+        useFallbackDirectory = true;
+        _logger.warning(
+          _tag,
+          'Storage permission was not granted for public log export. Falling back to app documents directory.',
+        );
       }
     }
-    final Directory directory = await _resolveExportDirectory();
+    final Directory directory = await _resolveExportDirectory(
+      useFallbackDirectory: useFallbackDirectory,
+    );
     await directory.create(recursive: true);
     final String timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
     final File file = File('${directory.path}/AlphaWet_logs_$timestamp.txt');
@@ -27,8 +34,8 @@ class AppLogExportService {
     return file;
   }
 
-  Future<Directory> _resolveExportDirectory() async {
-    if (Platform.isAndroid) {
+  Future<Directory> _resolveExportDirectory({bool useFallbackDirectory = false}) async {
+    if (Platform.isAndroid && !useFallbackDirectory) {
       return Directory('/storage/emulated/0/AlphaWet/logs');
     }
     return getApplicationDocumentsDirectory();

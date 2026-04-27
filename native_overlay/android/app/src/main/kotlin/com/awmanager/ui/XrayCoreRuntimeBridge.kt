@@ -711,7 +711,24 @@ object XrayCoreRuntimeManager {
                     "logFilePath" to bundle.logFile.absolutePath,
                 )
             }
-            return block(bundle) + mapOf("logFilePath" to bundle.logFile.absolutePath)
+            return try {
+                block(bundle) + mapOf("logFilePath" to bundle.logFile.absolutePath)
+            } catch (error: Throwable) {
+                val outputTail = tailLog(bundle.logFile)
+                mapOf(
+                    "success" to false,
+                    "state" to "failed",
+                    "message" to buildString {
+                        append("Transient authentication failed: ")
+                        append(error.message ?: error.javaClass.simpleName)
+                        if (outputTail.isNotBlank()) {
+                            append('\n')
+                            append(outputTail)
+                        }
+                    },
+                    "logFilePath" to bundle.logFile.absolutePath,
+                )
+            }
         } finally {
             XrayNativeBridge.stop(pid)
         }

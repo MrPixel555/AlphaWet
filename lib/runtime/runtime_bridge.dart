@@ -35,6 +35,13 @@ class RuntimeBridge {
     return granted ?? false;
   }
 
+  static Future<void> openAppSettings() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    await _channel.invokeMethod<void>('openAppSettings');
+  }
+
   static Future<Map<Object?, Object?>?> performPostConnectSecurityCheck({
     required String configId,
     required String displayName,
@@ -52,6 +59,7 @@ class RuntimeBridge {
       };
     }
     try {
+      final DateTime startedAt = DateTime.now();
       return await _channel.invokeMapMethod<Object?, Object?>(
         'performPostConnectSecurityCheck',
         <String, Object?>{
@@ -64,11 +72,16 @@ class RuntimeBridge {
           'socksPort': socksPort,
         },
       ).timeout(
-        const Duration(seconds: 18),
+        const Duration(seconds: 45),
         onTimeout: () => <Object?, Object?>{
           'success': false,
           'state': 'failed',
-          'message': 'Authentication timed out before AlphaWet could mark the connection active.',
+          'message':
+              'Authentication timed out before AlphaWet could mark the connection active. '
+                  'elapsedMs=${DateTime.now().difference(startedAt).inMilliseconds}, '
+                  'configId=$configId, enableDeviceVpn=$enableDeviceVpn, '
+                  'vpnPermissionGranted=$vpnPermissionGranted, httpPort=$httpPort, socksPort=$socksPort. '
+                  'Timed out while waiting for transient runtime authentication, Play Integrity token issuance, or verifier response.',
         },
       );
     } on MissingPluginException {

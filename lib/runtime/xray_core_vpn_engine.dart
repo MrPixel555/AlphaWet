@@ -34,7 +34,15 @@ class XrayCoreVpnEngine implements VpnEngine {
       );
     }
     try {
-      _logger.info(_tag, 'Validating config through Android post-connect security policy.');
+      _logger.info(
+        _tag,
+        'Validating config through Android post-connect security policy. '
+        'configId=${entry.id}, displayName=${entry.name}, '
+        'enableDeviceVpn=${runtimeSettings.enableDeviceVpn}, '
+        'vpnPermissionGranted=${runtimeSettings.vpnPermissionGranted}, '
+        'httpPort=${runtimeSettings.httpPort}, socksPort=${runtimeSettings.socksPort}, '
+        'configJsonLength=${entry.xrayConfigJson?.length ?? 0}',
+      );
       final Map<Object?, Object?>? raw = await RuntimeBridge.performPostConnectSecurityCheck(
         configId: entry.id,
         displayName: entry.name,
@@ -44,6 +52,7 @@ class XrayCoreVpnEngine implements VpnEngine {
         httpPort: runtimeSettings.httpPort,
         socksPort: runtimeSettings.socksPort,
       );
+      _logger.info(_tag, 'Android post-connect raw payload: ${_describePayload(raw)}');
       final VpnEngineResult result = _fromChannel(raw);
       if (result.success) {
         _logger.info(_tag, 'Android post-connect security policy passed. ${result.message}');
@@ -158,6 +167,23 @@ class XrayCoreVpnEngine implements VpnEngine {
         message: error.message ?? 'Failed to stop Android Xray runtime.',
       );
     }
+  }
+
+  String _describePayload(Map<Object?, Object?>? payload) {
+    if (payload == null || payload.isEmpty) {
+      return '[empty]';
+    }
+    final List<String> parts = <String>[];
+    payload.forEach((Object? key, Object? value) {
+      final String label = '$key';
+      final String rendered = switch (value) {
+        null => 'null',
+        List<Object?> list => '[${list.join(', ')}]',
+        _ => '$value',
+      };
+      parts.add('$label=$rendered');
+    });
+    return parts.join(' | ');
   }
 
   VpnEngineResult _fromChannel(Map<Object?, Object?>? payload) {
